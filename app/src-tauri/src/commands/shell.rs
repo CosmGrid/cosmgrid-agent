@@ -4,7 +4,18 @@
 use tauri_plugin_shell::ShellExt;
 
 use crate::process::{run_with_idle_timeout, ShellOutput};
-use crate::security::fnv1a_hex;
+use crate::security::{extra_path_dirs, fnv1a_hex, prepend_path_dirs};
+
+fn shell_command_with_path(
+    app: &tauri::AppHandle,
+    program: &str,
+) -> tauri_plugin_shell::process::Command {
+    let command = app.shell().command(program);
+    match prepend_path_dirs(std::env::var_os("PATH"), extra_path_dirs()) {
+        Some(path) => command.env("PATH", path),
+        None => command,
+    }
+}
 
 /// bash 工具单条命令的**静默**上限——按空闲计时，不按总时长计时（跟 sse-chunk-timeout.ts
 /// 同一个思路：真在干活的命令会不断吐 stdout/stderr，每来一行就重置计时，pnpm install /
@@ -30,9 +41,7 @@ pub async fn run_shell_command(
     command: String,
     cwd: String,
 ) -> Result<ShellOutput, String> {
-    let (rx, child) = app
-        .shell()
-        .command("sh")
+    let (rx, child) = shell_command_with_path(&app, "sh")
         .args(["-c", &command])
         .current_dir(cwd)
         .spawn()
@@ -52,9 +61,7 @@ pub async fn run_shell_args(
     args: Vec<String>,
     cwd: String,
 ) -> Result<ShellOutput, String> {
-    let (rx, child) = app
-        .shell()
-        .command(&program)
+    let (rx, child) = shell_command_with_path(&app, &program)
         .args(args)
         .current_dir(cwd)
         .spawn()
