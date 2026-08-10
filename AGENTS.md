@@ -25,28 +25,28 @@
 
 > 这 4 条是同一个病：上下文被锁死在「某模型 + 某套餐 + 某 app」，任何「想换」的理由都导致断片。真北就是解这个病。
 
-当前文档入口（2026-07-04 收口到 6 类文件，后续先读这份）：
+当前文档入口（2026-08-10 复核；6 个常驻文件 + 1 个临时决策评审）：
 - 索引：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/00-项目文档索引.md`（先看这份，决定去看哪一份）
 - 长期总方案（架构文档）：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-独立多模型AI工作平台完整方案.md`——⚠️ 2026-07-04 核实后确认新旧混杂，先看文档顶部的核实结论横幅
 - 关键技术文档：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/Cosmgrid-Agent-关键技术文档.md`——每层用什么技术、完善度、参考项目对照，2026-07-04 逐代码核实，当前最准确
-- 待办清单：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/剩余问题汇总-2026-07-03.md`——唯一权威待办来源（原"当前状态与后续路线.md"已归档，别再引用那份）
+- 待办清单：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/剩余问题汇总.md`——唯一权威待办来源（原"当前状态与后续路线.md"已归档，别再引用那份）
 - UI 规范：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/CosmGrid-Agent-Ui.md`
 - 打开方式：`/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/项目文档/应用打开方式.md`
 
 文档纪律：
-- `项目文档/` 根目录**只保留上面 6 类文件**，其余全部归档到 `项目文档/归档文件/`，桌面不再放散落过程稿。
+- `项目文档/` 根目录**只保留上面 6 个常驻文件**。尚未拍板的重大决策可临时保留 1 份评审稿，并必须在索引里标明；结论确定后立即归档。其余全部归档到 `项目文档/归档文件/`，桌面不再放散落过程稿。
 - 给用户看先看"00-项目文档索引"；给 AI 查历史依据再进归档。
 - ⚠️ `项目文档/` 已在 `.gitignore`（过程文档不入版本管理，本地保留）。
 
 **文档同步纪律**（改代码时对照检查，照抄 Turborepo AGENTS.md 的做法，别只是笼统说"记得更新文档"）：
 - 改了任何一层的技术实现（LLM 接入/工具/记忆/意图判断/编排等）→ 检查 `Cosmgrid-Agent-关键技术文档.md` 对应章节的技术描述和完善度判断是不是还准。
-- 完成或新发现一项待办 → 更新 `剩余问题汇总-2026-07-03.md`，不要另开新汇总文件。
+- 完成或新发现一项待办 → 更新 `剩余问题汇总.md`，不要另开新汇总文件。
 - 产品定位/差异化策略变了 → 更新 `Cosmgrid-Agent-独立多模型AI工作平台完整方案.md` §1（其余章节已知过时，不用管）。
 - 过程稿/方案稿写完执行完 → 当天归档到 `项目文档/归档文件/`，不留在桌面或项目文档根目录。
 
 ## 进度与当前任务
 
-> ⚠️ **详细当前进度、下一步优先级、非阻塞问题，一律以 `项目文档/剩余问题汇总-2026-07-03.md` 为准**（原"当前状态与后续路线.md"已于 2026-07-04 归档，不再是当前入口，别再引用它）——这里不再重复维护一份进度快照，避免两处又分叉。这里只留几条几乎不会变的稳定事实：
+> ⚠️ **详细当前进度、下一步优先级、非阻塞问题，一律以 `项目文档/剩余问题汇总.md` 为准**（原"当前状态与后续路线.md"已归档，不再是当前入口，别再引用它）——这里不再重复维护一份进度快照，避免两处又分叉。这里只留几条几乎不会变的稳定事实：
 
 - 大版本线：v0.1 数据底座 → v0.2 多模型对话 → v0.3 架构返工（`tauri-plugin-sql`）→ v0.4 项目工作区 → v0.5 首次启动引导 → v0.6 长期记忆/RAG → v0.7 工具执行层/CLI 引擎 → v0.8 多模型对弈 → v0.9 智能省 token → 2026-06-28/29 大改（收敛为"以对话页为中心，工作文件夹绑定对话，右侧工作面板展示执行"）。全部已完成，具体子项和后续每轮进展见上面那份当前状态文档。
 - 多模型对弈（debate）已经是**对话内触发**（`ChatPage` 里嵌，`debate-engine`/`debate-runner`/`debate-suggester`），不是独立页面——早期做过独立 `DebatePage`，已被删除（commit `447d9e0`），别再往"要不要做 DebatePage"方向想。
@@ -66,7 +66,7 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 ## 技术栈（v0.1 必须用）
 
 - **桌面壳**：Tauri 2（不是 Electron，不是 Web）
-- **前端**：React 18 + TypeScript
+- **前端**：React 19 + TypeScript
 - **UI 库**：shadcn/ui + Tailwind
 - **数据库**：SQLite（本地）
 - **DB 访问**：`tauri-plugin-sql`（⚠️ 不用 Prisma，会打包死局；也不用 rusqlite 手写）
@@ -75,16 +75,13 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 
 **package.json 起步**：直接抄 CC Switch 的依赖列表（路径 `/Users/shaoyitong/Desktop/开发/Cosmgrid-Agent/技术参考/cc-switch-main/package.json`）
 
-## 数据表（核心 13 张 + v0.6+ 新增 6 张 = 共 **19 张**；2026-06-22 删死表 conversation_model_snapshots；建表 DDL 已拆分到 `app/src/lib/db/schema.ts`，不再是单一 `db.ts` 里的 `initSchema()`）
+## 数据表（当前代码事实）
 
-**资源层（4）**：providers / api_credentials / token_plans / models
-**模板层（2）**：project_templates / project_template_roles
-**任务层（4）**：projects / project_stages / conversations / messages（~~conversation_model_snapshots 死表已删~~）
-**连续性层（2）**：checkpoints / handoff_packets（注意：字段是 `projectId`，不是 `taskId`）
-**统计层（1）**：usage_events（字段也是 `projectId`）
-**v0.6+ 新增（6）**：project_memories（长期记忆/RAG）/ model_performance_stats（SmartRouter 数据源）/ semantic_cache（语义缓存）/ debate_sessions（多模型对弈）/ tool_executions（工具执行审计）/ workspace_configs（工作区配置）
+`app/src/lib/db/schema.ts` 当前定义 **32 张基础表**，`app/src/lib/db/schema-migrations.ts` 另创建 **19 张扩展/迁移表**。不要再引用早期“13+6=19 张表”口径，也不要从长期方案正文抄表数量。
 
-核心 13 张的完整字段定义见方案文档第 9 节；v0.6+ 6 张以 `app/src/lib/db/schema.ts` 的 DDL 为准。
+- 表结构、字段与索引：以 `schema.ts` / `schema-migrations.ts` 为唯一代码事实。
+- 领域 CRUD：放在 `app/src/lib/db/` 对应文件，不退回 `db.ts` 单体。
+- 历史稳定约束仍成立：不要建 Task 表；Checkpoint / HandoffPacket / UsageEvent 使用 `projectId`，不是 `taskId`。
 
 ## 借鉴项目（v0.1 主要）
 
@@ -122,6 +119,15 @@ v0.1/v0.2 用的「Prisma + 内嵌 Hono(Node) server」有**打包死局**：Pri
 ## 工作纪律
 
 通用工作方式（怎么派 agent、怎么验证、怎么跟用户沟通等）由全局配置统一管理（Claude Code 走 `~/.claude/CLAUDE.md` + `~/.claude/rules/zh/`；Codex 走对应的全局配置），本文件不重复罗列，避免和全局内容脱节。这里只保留本项目专属的规则（见下面"文档冲突点"和"沟通风格"）。
+
+### AI 协作开发方法：规格驱动 + 风险分级验证
+
+本项目不机械实行“每次先写大量单元测试”的 TDD 仪式。每个工作包先由架构/规划角色给出一张简短规格卡：用户结果、非目标、不可破坏的不变量、3 至 5 个验收场景和明确禁止事项；执行角色只做最小范围实现；独立审查角色按规格、差异和真实运行证据复核，执行角色不得自行宣布 Gate 通过。
+
+- **必须测试优先**：数据库迁移与数据保留、账号/项目隔离、凭据与权限边界、确定性算法、已复现回归 Bug。
+- **普通低风险改动**：字段透传、展示、普通编排和机械 CRUD 可先实现；用类型检查、构建、lint、目标场景 smoke 和人工差异审查验证，不为每个内部函数重复建立 mock 测试。
+- **跨模块能力**：每条核心用户链路至少有一条高价值端到端或真实宿主验收；桌面打包、Keychain、SQLite 迁移等必须在真实副本或真实宿主验证，不能只依赖 mock。
+- **测试价值**：新增测试前先检查是否已覆盖同一用户行为。保留能防止数据丢失、隔离失效、安全越界和核心回归的测试；合并或删除只锁定实现细节、且已被更高层场景覆盖的重复测试。覆盖率仍是质量护栏，不是唯一完成标准。
 
 ### 别把代码堆回大文件（防止 ChatPage.tsx / db.ts 回潮）
 
