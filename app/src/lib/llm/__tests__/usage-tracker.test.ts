@@ -31,8 +31,7 @@ vi.mock("../model-performance-stats", () => ({
 }));
 
 import { recordUsageEvent, flushPendingWrites } from "../usage-tracker";
-import { estimateCostWithCatalog } from "../cost-calculator";
-import type { CatalogCostEstimate } from "../cost-calculator";
+import { estimateCostWithCatalog, type CatalogCostEstimate } from "../cost-calculator";
 
 const baseParams = {
   modelId: "m-1",

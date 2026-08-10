@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { McpServerRow } from "@/lib/db/mcp";
-import { buildLocalMcpSessionScope } from "../session-scope";
-import { formatLocalMcpLaunch } from "../session-scope";
+import { buildLocalMcpSessionScope, formatLocalMcpLaunch } from "../session-scope";
 
 function server(overrides: Partial<McpServerRow> = {}): McpServerRow {
   return {
