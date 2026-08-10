@@ -851,6 +851,29 @@ describe("streamWithFallback - D4 额度熔断", () => {
     // 之前的 bug 会让 third 绕过 cooldown 检查被直接调用。
     expect(mocks.streamText).not.toHaveBeenCalled();
   });
+
+  // 2026-07-16 review 修复回归测试：上面那条测试只断言了错误前缀，没检查 detail 里
+  // 每个模型的具体文案——之前不管是 cooldown 还是 quota_exhausted，detail 里统一走
+  // formatCooldownRemainingMs(getCooldownRemainingMs(...))，quota 耗尽的模型不在
+  // cooldown 状态表里、remainingMs 恒为 0，Math.max(1,...) 保底成"还需 1 秒"，
+  // 误导用户以为等 1 秒就行——实际是套餐用完，永远不会自己恢复。这里精确断言：
+  // 真冷却的模型带"还需 N"，quota 耗尽的模型改标"套餐额度已用尽，等待无效"，不再
+  // 出现假的"还需 1 秒"。
+  it("cooldown 与 quota 交错 → quota 耗尽的模型不再显示假的'还需 1 秒'", async () => {
+    markModelFailed(primary.modelId);
+    const cbs: StreamCallbacks = { onDelta: () => {} };
+
+    await expect(
+      streamWithFallback(
+        [primary, fallback],
+        [{ role: "user", content: "x" }],
+        cbs,
+        { quotaGuard: quotaGuard(["m-fallback"]) },
+      ),
+    ).rejects.toThrow(
+      /All models are cooling down: Primary（还需 \d+(?: 分 \d+ 秒| 分钟| 秒)）、Fallback（套餐额度已用尽，等待无效）/,
+    );
+  });
 });
 
 describe("streamWithFallback - abort 处理", () => {

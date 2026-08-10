@@ -356,6 +356,37 @@ describe("streamViaCli abort 真杀子进程（改进-3 核心）", () => {
     const spawnCalls = invokeMock.mock.calls.filter((c) => c[0] === "spawn_cli_stream");
     expect(spawnCalls).toHaveLength(0);
   });
+
+  // 2026-07-16 review 修复回归测试：之前只有 API 直连路径（chat-fallback-attempt.ts）
+  // 在结束时对称 removeEventListener，CLI 路径只 addEventListener 从没清理过——同一轮
+  // 对话内如果 native resume/harness 重试导致 streamViaCli 被多次调用（共享同一个
+  // AbortController），每次调用都会在这个 controller 上永久多挂一个监听器。断言正常
+  // 结束（非 abort）后监听器确实被移除，而不是只靠 settled 标志位在内部挡一下。
+  it("正常 terminated 结束后应该 removeEventListener，不留下监听器", async () => {
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+
+    const p = streamViaCli(endpoint, messages, { onDelta: vi.fn() }, { signal: ac.signal });
+    await Promise.resolve();
+    const ch = captureSpawnChannel();
+    ch.send({ type: "terminated", code: 0 });
+    await p;
+
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("abort 触发后应该 removeEventListener 自己", async () => {
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+
+    const p = streamViaCli(endpoint, messages, { onDelta: vi.fn() }, { signal: ac.signal });
+    await Promise.resolve();
+    captureSpawnChannel();
+    ac.abort();
+    await p;
+
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
 });
 
 describe("CLI 程序路径选择", () => {

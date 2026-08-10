@@ -488,6 +488,15 @@ export function classifyLlmError(
     // 修法：先 sanitize rawMessage，再从 sanitized 文本里取 detail 分段。
     const idx = sanitized.indexOf(":");
     const detail = idx >= 0 ? sanitized.slice(idx + 1).trim() : sanitized;
+    // 注意：这个前缀 + 后缀文案是固定格式，`app/src/pages/chat/cooldown-error.ts` 的
+    // `parseCooldownCountdownMessage` 靠 `message.includes("所有可用模型目前都在冷却中")`
+    // 做实时倒计时 UI 的解析门槛，`COOLDOWN_ENTRY_RE` 再从 detail 里抠出"还需 N 秒/分"的
+    // 条目渲染活的倒计时——不能改这个前缀，否则会整个跳过倒计时解析，退化成静态文本。
+    // 2026-07-16 review 修复的"quota 耗尽误标还需 1 秒"问题已经在 chat-fallback.ts 的
+    // detail 构造那一步修掉了（quota 耗尽的模型现在标"套餐额度已用尽，等待无效"，不含
+    // "还需"字样，不会被 COOLDOWN_ENTRY_RE 误抓进倒计时——这样反而是期望行为：真正在
+    // 冷却的模型才会出现在活的倒计时里，quota 耗尽的模型不会被倒计时结束后误判成"可以
+    // 重试了"）。
     return {
       category: "all_models_cooling",
       httpStatus: 503,

@@ -198,6 +198,23 @@ describe("classifyLlmError", () => {
     expect(result.shouldFallback).toBe(false);
     expect(result.userMessage).toContain("MiniMax-M3（还需 4 分钟）");
     expect(result.userMessage).toContain("agnes-2.0-flash（还需 12 分钟）");
+  });
+
+  // 2026-07-16 review 修复回归测试：chat-fallback.ts 现在给 quota 耗尽（非 cooldown）的
+  // 模型标"套餐额度已用尽，等待无效"而不是假的"还需 1 秒"（根因修复见 chat-fallback.ts）。
+  // 这里只断言 classifier 原样透出 detail、不重新解析/篡改这部分文案——包裹前后缀必须
+  // 保持不变，因为 cooldown-error.ts 的 parseCooldownCountdownMessage 依赖这个固定格式
+  // 做实时倒计时解析（quota 耗尽的条目因为不含"还需"，天然不会被那个解析器的正则误抓进
+  // 倒计时，这是期望行为，不是遗漏）。
+  it("cooldown 与 quota 耗尽混在一起 → detail 原样透出，包裹文案格式不变", () => {
+    const result = classifyLlmError(
+      new Error(
+        "All models are cooling down: MiniMax-M3（还需 4 分钟）、agnes-2.0-flash（套餐额度已用尽，等待无效）",
+      ),
+    );
+    expect(result.category).toBe("all_models_cooling");
+    expect(result.userMessage).toContain("MiniMax-M3（还需 4 分钟）");
+    expect(result.userMessage).toContain("agnes-2.0-flash（套餐额度已用尽，等待无效）");
     expect(result.userMessage).toContain("倒计时结束后可以继续发送");
   });
 });

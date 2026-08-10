@@ -127,6 +127,7 @@ export async function streamViaCli(
       stallTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        options.signal?.removeEventListener("abort", handleAbort);
         void invoke("kill_cli", { sessionId }).catch(() => {});
         const err = new Error(
           `CLI 进程 ${JS_STALL_TIMEOUT_MS / 1000} 秒内未产生任何事件`,
@@ -148,6 +149,7 @@ export async function streamViaCli(
       if (settled) return;
       settled = true;
       disarmWatchdog();
+      options.signal?.removeEventListener("abort", handleAbort);
       if (errorMsg) {
         const err = new Error(errorMsg) as Error & {
           __cliKind?: CliErrorKind;
@@ -215,6 +217,7 @@ export async function streamViaCli(
       if (settled) return;
       settled = true;
       disarmWatchdog();
+      options.signal?.removeEventListener("abort", handleAbort);
       void invoke("kill_cli", { sessionId }).catch((err: unknown) => {
         console.warn("kill_cli 失败（子进程可能已结束）：", err);
       });
@@ -229,6 +232,14 @@ export async function streamViaCli(
       handleAbort();
       return;
     }
+    // 2026-07-16 review 修复：这里之前只做了上面那个"提前 aborted 就同步兜底"的修复，
+    // 没有对称加 removeEventListener——一次对话里如果发生 native resume / harness 重试
+    // 导致 streamViaCli 被多次调用（共享同一个 options.signal 对应的 AbortController），
+    // 每次调用都会在这个 controller 上永久挂一个新的 handleAbort 监听器，直到整轮对话
+    // 结束、controller 被丢弃才随对象一起被 GC——单轮内监听器数量有界，不是跨会话累积，
+    // 但跟 chat-fallback-attempt.ts 那边已经做的对称清理（options.signal?.removeEventListener
+    // 在 finally 里）不一致。现在 settle()/handleAbort() 自身/watchdog 超时三条退出路径
+    // 都补上了 removeEventListener，跟 API 路径保持一致。
     options.signal?.addEventListener("abort", handleAbort);
 
     invoke("spawn_cli_stream", {

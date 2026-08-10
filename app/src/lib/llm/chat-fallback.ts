@@ -156,10 +156,22 @@ export async function streamWithFallback(
     // "unknown"兜底——用户只看到一句生硬的英文提示，不知道具体哪几个模型在冷却、还要
     // 等多久，也不知道重启 app 能立即清空（冷却状态只在内存里，见 model-cooldown.ts）。
     // 这里把每个模型的剩余冷却时间拼进消息，error-classifier.ts 按前缀识别后原样透出。
+    //
+    // 2026-07-16 review 修复：上面这个 map 之前对 models 里所有模型（不区分 cooldown /
+    // quota_exhausted）都调 formatCooldownRemainingMs——quota 耗尽的模型根本不在
+    // cooldown 状态表里，getCooldownRemainingMs 对它们返回 0，formatCooldownRemainingMs
+    // 又用 Math.max(1, ...) 保底成"还需 1 秒"，误导用户以为等一下就能用，实际上是套餐
+    // 额度用完，永远不会自己恢复。这条 throw 只在 anyCooldown 为真时才会走到（见上面
+    // if 分支），而上面的 skip 循环保证走到这里的 models 里，每一个要么在 cooldown、
+    // 要么 quota 已耗尽（两者互斥），所以按 isInCooldown 分开两种文案。
     const detail = models
       .map((m) => {
-        const remaining = formatCooldownRemainingMs(getCooldownRemainingMs(m.modelId));
-        return `${m.displayLabel ?? m.modelName}（还需 ${remaining}）`;
+        const label = m.displayLabel ?? m.modelName;
+        if (isInCooldown(m.modelId)) {
+          const remaining = formatCooldownRemainingMs(getCooldownRemainingMs(m.modelId));
+          return `${label}（还需 ${remaining}）`;
+        }
+        return `${label}（套餐额度已用尽，等待无效）`;
       })
       .join("、");
     throw new Error(`All models are cooling down: ${detail}`);
