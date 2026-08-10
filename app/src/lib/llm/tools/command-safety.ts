@@ -206,7 +206,10 @@ const READONLY_PROGRAMS = new Set([
   // 2026-07-15 review 修复：find 也从这里移除——isReadOnlyCommand 只看程序名不看参数，
   // `find . -delete` / `find /path -exec rm {} +` 会被当"纯只读"直接跳过确认，
   // 真的删文件/跑任意程序。find 本身能写，跟 sed/awk 这批一样应该走确认。
-  "cd", "which", "type", "date", "env", "printenv",
+  // 2026-07-16 review 修复：env 也从这里移除——env 已经从 command-allowlist.ts 的白名单
+  // 里整个删掉了（通用进程启动器，靠它能绕过整套白名单），这里留着是死代码，一并清掉避免
+  // 以后有人误以为 env 还是允许的程序。
+  "cd", "which", "type", "date", "printenv",
   "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
   "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
 ]);

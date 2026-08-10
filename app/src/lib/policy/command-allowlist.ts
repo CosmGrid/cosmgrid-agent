@@ -35,9 +35,19 @@ export const BUILTIN_ALLOWED_PROGRAMS: ReadonlySet<string> = Object.freeze(
     "tsc", "vitest", "jest", "eslint", "prettier", "python", "python3", "pip", "pip3", "cargo", "go",
     // 常用 shell 工具：切目录 + 文本处理 + 文件/路径工具。无网络、无提权、无破坏性；
     // 危险用法（rm -rf / sudo / 重定向裸设备 / curl|sh 等）仍由上方黑名单拦截。
-    "cd", "which", "type", "date", "env", "printenv",
+    // 2026-07-16 review 修复：env 从这里移除——env 不是"只读查看环境变量"（那是 printenv
+    // 的活），env <program> [args...] 是通用进程启动器，任何白名单外的程序都能靠 env 中转
+    // 起来（比如 env bash -c "..."），完全绕过"只放开发常用+只读命令"这条白名单设计的
+    // 初衷，且不像 node -e 那样有明显可疑的字符串特征能被人工确认时警觉到。查看环境变量
+    // 的合法需求已有 printenv 覆盖，去掉 env 没有真实成本。
+    "cd", "which", "type", "date", "printenv",
     "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
     "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
+    // 2026-07-16 review 复查：sed/awk 跟 node -e 是同一类已知局限——awk 的 system() 和
+    // GNU sed 的 e 命令/flag 能在脚本参数里嵌一条真实 shell 命令，white-list 的 static
+    // 程序名检查看不穿脚本内容。文本处理是刚需（不像 env 那样能无成本移除），用户已明确
+    // 决策维持现状，靠"执行前用户确认"兜底，不额外加拦截规则——测试见
+    // command-safety.test.ts 的"awk system() / sed e 命令内嵌危险代码"两条用例。
     "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",
   ]),
 );
