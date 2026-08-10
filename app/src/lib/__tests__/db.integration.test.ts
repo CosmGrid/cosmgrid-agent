@@ -1559,3 +1559,62 @@ describe("getRoleBindingsForTemplate（阶段 D tidy：空字符串占位不进 
     expect(bindings.get("frontend")).toBe("model-real-frontend");
   });
 });
+
+describe("skillDefinitions.upsert 冲突分支（review：ON CONFLICT SQL 修复）", () => {
+  // 回归：ON CONFLICT DO UPDATE 曾写 `excluded.review_by ?? skill_definitions.reviewed_by`——
+  // 列名拼错 + `??` 非 SQLite 语法，任何「upsert 已存在 id」都会在冲突分支抛
+  // "no such column: excluded.review_by"。builtin 有 getById 守卫绕过，但
+  // registration 重新 upsert / 重复 approve 会踩到。这里用真 SQLite 走冲突路径。
+  const baseInput = {
+    id: "skill_conflict_probe",
+    label: "冲突分支探针",
+    purpose: "回归冲突分支专用。",
+    triggerPhases: ["execute"],
+    triggerKeywords: ["probe"],
+    requiredCapabilities: ["edit_files"],
+    systemGuidance: ["先读仓库。"],
+    acceptanceCriteria: ["通过"],
+    source: "user" as const,
+    reviewStatus: "pending" as const,
+  };
+
+  it("对已存在 id 再次 upsert 不再抛错（冲突分支 SQL 合法）", async () => {
+    await db.skillDefinitions.upsert({ ...baseInput, reviewedBy: null, reviewedAt: null });
+    // 若冲突分支 SQL 非法，这一步会抛 "no such column: excluded.review_by"
+    await expect(
+      db.skillDefinitions.upsert({ ...baseInput, label: "改过标签", reviewedBy: null, reviewedAt: null }),
+    ).resolves.toMatchObject({ id: baseInput.id, label: "改过标签" });
+  });
+
+  it("再次 upsert 带 reviewedBy=null → COALESCE 保留原审核人", async () => {
+    // 首次带审核人（模拟已 approve 过的行）
+    await db.skillDefinitions.upsert({
+      ...baseInput,
+      reviewStatus: "approved",
+      reviewedBy: "alice",
+      reviewedAt: "2026-07-14T00:00:00.000Z",
+    });
+    // 重新 upsert（如 registration 重注册）不带审核人 → 不应把 alice 冲掉
+    const row = await db.skillDefinitions.upsert({
+      ...baseInput,
+      label: "重注册",
+      reviewedBy: null,
+      reviewedAt: null,
+    });
+    expect(row.reviewedBy).toBe("alice");
+  });
+
+  it("再次 upsert 带新 reviewedBy → 覆盖旧审核人", async () => {
+    await db.skillDefinitions.upsert({
+      ...baseInput,
+      reviewedBy: "alice",
+      reviewedAt: "2026-07-14T00:00:00.000Z",
+    });
+    const row = await db.skillDefinitions.upsert({
+      ...baseInput,
+      reviewedBy: "bob",
+      reviewedAt: "2026-07-14T01:00:00.000Z",
+    });
+    expect(row.reviewedBy).toBe("bob");
+  });
+});

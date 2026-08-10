@@ -168,7 +168,7 @@ export const skillDefinitions = {
          acceptance_criteria = excluded.acceptance_criteria,
          source = excluded.source,
          review_status = excluded.review_status,
-         reviewed_by = excluded.review_by ?? skill_definitions.reviewed_by,
+         reviewed_by = COALESCE(excluded.reviewed_by, skill_definitions.reviewed_by),
          reviewed_at = excluded.reviewed_at,
          updated_at = excluded.updated_at`,
       [
