@@ -58,7 +58,6 @@ function syncNativeMenuLanguage(lang: string): void {
 }
 
 export async function initI18n(): Promise<void> {
-  // eslint-disable-next-line no-console
   console.log(
     "[i18n] locale files loaded — zh-CN top-level:",
     Object.keys(zhCNResources).length,
@@ -97,7 +96,6 @@ export async function initI18n(): Promise<void> {
   syncNativeMenuLanguage(i18n.language);
   i18n.on("languageChanged", syncNativeMenuLanguage);
 
-  // eslint-disable-next-line no-console
   console.log(
     "[i18n] init OK. language:",
     i18n.language,

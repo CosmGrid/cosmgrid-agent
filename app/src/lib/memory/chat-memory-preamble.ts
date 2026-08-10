@@ -33,7 +33,7 @@ const MERGED_MEMORY_LIMIT = 10;
  */
 export function extractTaskKeywords(text: string): string[] {
   return text
-    .split(/[\s,，。！？!?；;、:：()（）\[\]【】"'`]+/)
+    .split(/[\s,，。！？!?；;、:：()（）\x5b\x5d【】"'`]+/)
     .map((s) => s.trim())
     .filter((s) => s.length >= 2 && s.length <= 24)
     .slice(0, 8);

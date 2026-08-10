@@ -3,8 +3,7 @@ import { MessageSquare, Send, ShieldAlert, Square, User, Zap } from "lucide-reac
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { projects as dbProjects, messages as dbMessages, projectStages as dbStages, projectMemories as dbMemories, workspaceConfigs as dbWorkspaceConfigs } from "@/lib/db";
-import type { ApiCredential, DbMessage, Model, ProjectStage } from "@/lib/db";
+import { projects as dbProjects, messages as dbMessages, projectStages as dbStages, projectMemories as dbMemories, workspaceConfigs as dbWorkspaceConfigs, type ApiCredential, type DbMessage, type Model, type ProjectStage } from "@/lib/db";
 import { streamWithFallback, toModelEndpoint } from "@/lib/llm/chat-fallback";
 import { classifyLlmError } from "@/lib/llm/error-classifier";
 import { buildImageGuardPreamble, buildNoToolsPreamble, buildProjectMemoryPreamble, buildTimePreamble } from "@/lib/llm/prompts/context-preamble";

@@ -10,10 +10,9 @@
 // - 有工具 vs 没工具，纠正话术不同：没工具时不能叫它「去用真工具」（根本没有）。
 
 import { extractFilePaths, extractUrlClaims, extractQuotedClaims } from "./extract-claims";
-import { verifyFileClaims, verifyUrlClaims, verifyCommandClaims, unverifiedClaims } from "./verify-claims";
+import { verifyFileClaims, verifyUrlClaims, verifyCommandClaims, unverifiedClaims, type ReadRecord, type FetchRecord, type ExecRecord } from "./verify-claims";
 import { detectPseudoToolCalls } from "./detect-pseudo-tools";
 import { detectFabricatedUsageCount } from "./detect-usage-narration";
-import type { ReadRecord, FetchRecord, ExecRecord } from "./verify-claims";
 import type { FabricationSuspicion } from "./fabrication-constants";
 
 // 重新导出 FabricationSuspicion 给外部用

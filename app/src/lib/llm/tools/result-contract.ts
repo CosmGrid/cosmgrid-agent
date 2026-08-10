@@ -433,7 +433,6 @@ export function errorMessage(e: unknown): string {
  *   // r.content 可用
  */
 export async function readOrError(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fs: { readTextFile(path: string): Promise<string> },
   path: string,
   opts: { toolName: string; pathLabel?: string; notFoundStop?: string },

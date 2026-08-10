@@ -61,7 +61,7 @@ export async function runEvalCase(input: RunCaseInput): Promise<RunCaseOutput> {
 
   // 2. 准备沙箱（拷贝 fixture 到临时目录）
   const workspacePath = mkdtempSync(join(tmpdir(), `eval-${evalCase.id}-`));
-  let costTotal = 0;
+  const costTotal = 0;
   const attempts: EvalResult[] = [];
   const graded: Record<number, Array<{ grader: string; result: GraderResult }>> = {};
 

@@ -16,16 +16,13 @@ import {
 } from "@/lib/db";
 import { type ModelListItem, type CredentialListItem } from "@/lib/api";
 import { type Attachment } from "@/lib/llm/attachments";
-import { type OrchestrationState, type RoleId } from "@/lib/llm/orchestrator";
+import { currentNode, type OrchestrationState, type RoleId } from "@/lib/llm/orchestrator";
 import { type TurnIntentDecision, type WorkflowSnapshot } from "@/lib/workflow/types";
 import { type ToolConfirmRequest, type AskUserRequest } from "@/lib/llm/tools";
 import {
   type ModelEndpoint,
   type StreamUsage,
 } from "@/lib/llm/chat-fallback";
-import {
-  currentNode,
-} from "@/lib/llm/orchestrator";
 import { isPureSingleModelModeEnabled, isSmartRoutingEnabled } from "@/lib/app-settings";
 import { shouldExposeWriteTools, impliesWriteIntent } from "@/lib/llm/tool-permission-policy";
 import { getFsAdapter } from "@/lib/llm/tools/fs-adapter";
@@ -483,7 +480,6 @@ export function useChatStream(opts: UseChatStreamOptions) {
         return;
       }
 
-      let tools: Awaited<ReturnType<typeof prepareChatWorkspaceRuntime>>["tools"];
       let workspacePreamble: string | null = null;
       let workflowPreamble: string | null = null;
       let skillPreamble: string | null = null;
@@ -548,7 +544,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         activeCaps,
       });
       if (workspaceRuntime.aborted) return;
-      tools = workspaceRuntime.tools;
+      const tools = workspaceRuntime.tools;
       prep.tools = tools;
       workspacePreamble = workspaceRuntime.workspacePreamble;
       const desktopPath = workspaceRuntime.desktopPath;

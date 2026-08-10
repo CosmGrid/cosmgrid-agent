@@ -1,5 +1,4 @@
-import type { DatabaseLike } from "../db-migrations";
-import { runMigrations } from "../db-migrations";
+import { runMigrations, type DatabaseLike } from "../db-migrations";
 import { clearIdleLeaderOnlyOrchestration, repairCliPresetModels } from "./repairs";
 import { SCHEMA_MIGRATIONS } from "./schema-migrations";
 

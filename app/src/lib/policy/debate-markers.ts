@@ -9,8 +9,7 @@
  */
 
 import { z } from "zod";
-import type { PolicyDefinition } from "./types";
-import type { PolicyScope } from "./types";
+import type { PolicyDefinition, PolicyScope } from "./types";
 import { PolicyStore, policyStore } from "./policy-store";
 
 export const BUILTIN_DEBATE_MARKERS: ReadonlyArray<string> = Object.freeze([

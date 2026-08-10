@@ -39,14 +39,12 @@ import {
   type HandoffPacket,
   type Model,
   type ApiCredential,
-} from "@/lib/db";
-import { getApiKey } from "@/lib/keystore";
-import { searchAcrossProjectsHybrid } from "@/lib/memory/retrieval";
-import {
   projectMemories as dbMemories,
   memoryKindLabel,
   type ProjectMemory,
 } from "@/lib/db";
+import { getApiKey } from "@/lib/keystore";
+import { searchAcrossProjectsHybrid } from "@/lib/memory/retrieval";
 import { CreateCheckpointDialog, CheckpointDetailDialog } from "@/components/project-detail/CheckpointDialogs";
 import { GenerateHandoffDialog, HandoffDetailDialog } from "@/components/project-detail/HandoffDialogs";
 import { AddMemoryDialog } from "@/components/project-detail/MemoryDialogs";

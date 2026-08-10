@@ -71,7 +71,6 @@ export function StatsPage() {
     } catch (err) {
       // 阶段 I 修（铁律 4：静默吞错）：原 `} catch {` 没打日志，失败用户完全无感
       // 加 console.error 让 dev/QA 能看到；用户也至少在 devtools 看到 [StatsPage] 前缀
-      // eslint-disable-next-line no-console
       console.error("[StatsPage] load failed:", err);
       setSummary(aggregateUsage([]));
       setRows([]);
@@ -85,7 +84,6 @@ export function StatsPage() {
 
   useEffect(() => {
     void loadStats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 清空全部语义缓存：旧脏缓存一键清掉，清完刷新统计
@@ -93,7 +91,6 @@ export function StatsPage() {
     try {
       await clearAllCache();
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("[StatsPage] clear cache failed:", err);
     }
     await loadStats();
@@ -603,7 +600,6 @@ function getRoleLabel(
   }
   // 未知 roleKind：dev warning + 兜底显示原字符串
   if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
     console.warn(`[StatsPage] Unknown roleKind: "${roleKind}" — falling back to raw string`);
   }
   return roleKind;

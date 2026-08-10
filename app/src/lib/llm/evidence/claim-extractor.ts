@@ -120,7 +120,7 @@ function matchesAcceptanceLine(line: string, description: string): boolean {
 // 这是两个不同的语义——分别走不同的 extractor，避免 read claim 被错误归类到 file_modified。
 
 const FILE_MODIFICATION_RE =
-  /(?:修改了|修改|改了|编辑了|编辑|写了|写|创建了|创建|新建了|建立|建立了|覆盖了|更新了|删除了|删了|移除了|添加了|加了|补了|补充了|加入了|(?:I\s+)?(?:modified|edited|wrote|created|updated|deleted|removed|added|refactored|fixed)(?:\s+(?:file|the\s+file|it))?)\s*[`'"\(\[]?\s*((?:[\/A-Za-z0-9._\-]+\/)*[A-Za-z0-9._\-]+\.[A-Za-z0-9]{1,8})/gi;
+  /(?:修改了|修改|改了|编辑了|编辑|写了|写|创建了|创建|新建了|建立|建立了|覆盖了|更新了|删除了|删了|移除了|添加了|加了|补了|补充了|加入了|(?:I\s+)?(?:modified|edited|wrote|created|updated|deleted|removed|added|refactored|fixed)(?:\s+(?:file|the\s+file|it))?)\s*[`'"([]?\s*((?:[/A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8})/gi;
 
 /** 从 assistant 文本提取"声称修改/写/创建"过的文件路径。 */
 export function extractFileModificationClaims(text: string): string[] {

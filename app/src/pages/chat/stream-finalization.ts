@@ -1,7 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { ModelMessage } from "ai";
-import { toolExecutions, workflowRuns } from "@/lib/db";
-import type { ToolExecutionRow } from "@/lib/db";
+import { toolExecutions, workflowRuns, type ToolExecutionRow } from "@/lib/db";
 import { writeCache } from "@/lib/llm/semantic-cache";
 import type { StreamUsage } from "@/lib/llm/chat-fallback";
 import { attachObservedActivity, completeCurrentWorkflowNode, failCurrentWorkflowNode, markCurrentWorkflowNodeNeedsUser, repairCurrentWorkflowNode } from "@/lib/workflow/reducer";

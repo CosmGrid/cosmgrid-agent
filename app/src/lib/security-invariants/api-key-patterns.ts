@@ -8,11 +8,11 @@
  */
 
 export const API_KEY_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
-  /sk-ant-(?:api03-)?[A-Za-z0-9_\-]+/g, // Anthropic
-  /sk-proj-[A-Za-z0-9_\-]+/g, // OpenAI project
+  /sk-ant-(?:api03-)?[A-Za-z0-9_-]+/g, // Anthropic
+  /sk-proj-[A-Za-z0-9_-]+/g, // OpenAI project
   /sk-[A-Za-z0-9]{20,}/g, // OpenAI legacy
-  /AIza[A-Za-z0-9_\-]+/g, // Google
-  /gsk_[A-Za-z0-9_\-]+/g, // Grok
+  /AIza[A-Za-z0-9_-]+/g, // Google
+  /gsk_[A-Za-z0-9_-]+/g, // Grok
 ]);
 
 /** 统一的脱敏占位符（不暴露"被脱敏了"的事实，避免反向探测）。 */

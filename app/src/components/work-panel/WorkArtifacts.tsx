@@ -32,7 +32,6 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
   // 阶段 J 修（铁律 4：静默吞错）：isHtmlTooLarge 降级路径加 dev warning，让 QA 能发现
   const isHtmlTooLarge = artifact.kind === "html" && body.length > HTML_SRC_LIMIT;
   if (isHtmlTooLarge && import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
     console.warn(`[WorkArtifacts] HTML too large (${body.length} bytes), falling back to source view: ${artifact.title}`);
   }
   // 阶段 G：edit 工件有 diffOld → 展开区用 DiffView，不显示 pre
@@ -83,7 +82,6 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
                   try {
                     const doc = e.currentTarget.contentDocument;
                     if (doc && doc.body && doc.body.childNodes.length === 0) {
-                      // eslint-disable-next-line no-console
                       console.warn(`[WorkArtifacts] iframe 加载后无内容: ${artifact.title}`);
                     }
                   } catch {
@@ -92,7 +90,6 @@ const ArtifactItem = memo(function ArtifactItem({ artifact }: { artifact: WorkAr
                 }}
                 onError={() => {
                   if (import.meta.env.DEV) {
-                    // eslint-disable-next-line no-console
                     console.error(`[WorkArtifacts] iframe 加载失败: ${artifact.title}`);
                   }
                 }}

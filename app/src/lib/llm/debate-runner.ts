@@ -3,17 +3,15 @@
 // 把 debate-engine 的可注入 RunRole 接到实际模型调用（Vercel AI SDK generateText）+ 落 UsageEvent。
 // 用 generateText（非流式）：对弈每个角色是一次性产出，不需要流式中间态。
 
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
-import { generateText } from "ai";
 import { getLanguageModel } from "./provider-factory";
 import { resolveMaxOutputTokens } from "./model-limits";
 import { recordUsageEvent } from "./usage-tracker";
 import { isCliProviderType } from "./cli-protocol";
 import { streamViaCli } from "./cli-engine";
 import { markModelFailed, markModelSucceeded } from "./model-cooldown";
-import type { RunRole, JudgeRunner, JudgeDecision } from "./debate-engine";
-import { judgeSystemPrompt, parseJudgeDecision } from "./debate-engine";
+import { judgeSystemPrompt, parseJudgeDecision, type RunRole, type JudgeRunner, type JudgeDecision } from "./debate-engine";
 
 /** 生产用 RunRole：调真实模型 + 记录用量（role 记成 debate_<角色>，StatsPage 可见对弈成本） */
 export const realRunRole: RunRole = async ({ systemPrompt, userPrompt, config, signal }) => {
