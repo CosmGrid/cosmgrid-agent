@@ -6,6 +6,7 @@ import type { ChatMessage } from "@/pages/chat/types";
 const mocks = vi.hoisted(() => ({
   writeCache: vi.fn(),
   saveSnapshot: vi.fn(),
+  getById: vi.fn(),
   listByMessage: vi.fn(),
   listByConversation: vi.fn(),
   completeCurrentWorkflowNode: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/llm/semantic-cache", () => ({
 vi.mock("@/lib/db", () => ({
   workflowRuns: {
     saveSnapshot: mocks.saveSnapshot,
+    getById: mocks.getById,
   },
   toolExecutions: {
     listByMessage: mocks.listByMessage,
@@ -52,7 +54,11 @@ function makeSnapshot(phase: string, overrides: Record<string, unknown> = {}) {
 describe("finalizeStreamedChatTurn", () => {
   beforeEach(() => {
     mocks.writeCache.mockReset();
-    mocks.saveSnapshot.mockReset().mockResolvedValue(undefined);
+    // 2026-07-16 review 修复：saveSnapshot 现在返回 { applied: boolean }（乐观锁 CAS 结果），
+    // 默认 mock 成 applied: true——大多数测试关心的是"该不该完成/失败节点"，不是 CAS 本身，
+    // CAS 未命中的场景单独测（见下方"陈旧写入被 CAS 拒绝"用例）。
+    mocks.saveSnapshot.mockReset().mockResolvedValue({ applied: true });
+    mocks.getById.mockReset().mockResolvedValue({ snapshotVersion: 0 });
     mocks.listByMessage.mockReset().mockResolvedValue([]);
     mocks.listByConversation.mockReset().mockResolvedValue([]);
     mocks.completeCurrentWorkflowNode.mockReset().mockReturnValue({ runId: "run-1", currentNodeId: null });
@@ -87,6 +93,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: true,
       taskRole: "standard",
       shouldCompleteWorkflowNode: false,
@@ -130,6 +137,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -163,6 +171,60 @@ describe("finalizeStreamedChatTurn", () => {
     expect(applyWorkflowSnapshot).toHaveBeenCalledWith(nextWorkflow);
   });
 
+  it("2026-07-16：后台验收落地前用户已切到别的会话 → 不覆盖全局 workflowSnapshot，但仍落库", async () => {
+    const nextWorkflow = { runId: "run-1", currentNodeId: null };
+    mocks.completeCurrentWorkflowNode.mockReturnValue(nextWorkflow);
+    const applyWorkflowSnapshot = vi.fn();
+    const workflowSnapshot = makeSnapshot("plan");
+    // 模拟"发起这轮验收时是 conv-1，验收后台跑的这段时间里用户已经切到 conv-2"——
+    // conversationIdRef 是活体引用，跟 conversationId 这个闭包值不同步是这个 bug 的关键。
+    const conversationIdRef = { current: "conv-1" };
+
+    const pending = finalizeStreamedChatTurn({
+      text: "hello",
+      assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+      assistantId: "assistant-1",
+      streamingResult: {
+        fullContent: "final answer",
+        lastModelId: "model-1",
+        lastResultModelId: "model-result",
+        lastUsage: undefined,
+        lastToolCallCount: 0,
+        harnessDirty: false,
+      },
+      conversationId: "conv-1",
+      conversationIdRef,
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: true,
+      workflowSnapshot,
+      workflowRunId: "run-1",
+      controllerAborted: false,
+      persistAssistant: vi.fn(),
+      setMessages: vi.fn((updater) => updater([])),
+      applyWorkflowSnapshot,
+    });
+
+    // finalizeStreamedChatTurn 本身很快 resolve（不等后台验收）——这里模拟用户在它
+    // resolve 之后、后台验收还没跑完之前，切到了另一个会话。
+    await pending;
+    conversationIdRef.current = "conv-2";
+
+    // 等后台验收（fire-and-forget）真正落地。
+    await vi.waitFor(() => expect(mocks.saveSnapshot).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // DB 落库记录的是 conv-1 这个 workflow run 自己的真实结果，跟用户当前在看哪个会话
+    // 无关，应该照常写。
+    expect(mocks.saveSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-1",
+      snapshot: nextWorkflow,
+      eventType: "workflow.node_completed",
+    }));
+    // 但全局 UI 状态不能被 conv-1 跑完的验收结果覆盖——用户已经在看 conv-2 了。
+    expect(applyWorkflowSnapshot).not.toHaveBeenCalled();
+  });
+
   it("Harness 工程实施计划阶段1：execute 阶段 0 工具调用 → 验收不通过，不完成节点而是标 failed", async () => {
     const failedWorkflow = { runId: "run-1", currentNodeId: "node-1" };
     mocks.failCurrentWorkflowNode.mockReturnValue(failedWorkflow);
@@ -180,6 +242,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -221,6 +284,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: true,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -256,6 +320,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -301,6 +366,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -341,6 +407,7 @@ describe("finalizeStreamedChatTurn", () => {
         harnessDirty: false,
       },
       conversationId: "conv-1",
+      conversationIdRef: { current: "conv-1" },
       cacheEligible: false,
       taskRole: "standard",
       shouldCompleteWorkflowNode: true,
@@ -379,6 +446,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+        conversationIdRef: { current: "conv-1" },
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -410,6 +478,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+        conversationIdRef: { current: "conv-1" },
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -453,6 +522,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+        conversationIdRef: { current: "conv-1" },
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -504,6 +574,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+        conversationIdRef: { current: "conv-1" },
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -556,6 +627,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+        conversationIdRef: { current: "conv-1" },
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,
@@ -597,6 +669,7 @@ describe("finalizeStreamedChatTurn", () => {
           harnessDirty: false,
         },
         conversationId: "conv-1",
+        conversationIdRef: { current: "conv-1" },
         cacheEligible: false,
         taskRole: "standard",
         shouldCompleteWorkflowNode: true,

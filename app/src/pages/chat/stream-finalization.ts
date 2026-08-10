@@ -44,6 +44,14 @@ export interface FinalizeStreamedChatTurnArgs {
   persistAssistant: PersistAssistant;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   applyWorkflowSnapshot: (snapshot: WorkflowSnapshot | null) => void;
+  /**
+   * 后台验收（runWorkflowVerificationInBackground）在 finalizeStreamedChatTurn 已经
+   * resolve、isStreaming 已归位之后还会继续跑一段时间（toolExecutions 查询 + verifyTask）。
+   * 这段时间内用户完全可能已经切换到另一个会话——而 applyWorkflowSnapshot 写的是
+   * useOrchestration 里那个全局 workflowSnapshotRef/state，不按 conversationId 分片。
+   * 不传这个 ref 校验的话，跑完的旧会话验收结果会直接覆盖用户当前正在看的新会话快照。
+   */
+  conversationIdRef: { current: string | null };
 }
 
 export interface FinalizedStreamedChatTurn {
@@ -78,6 +86,26 @@ async function runWorkflowVerificationInBackground(
   ) {
     return;
   }
+  // 这段后台验收横跨多个 await（listByMessage/listByConversation/verifyTask/
+  // saveSnapshot），跑完时用户完全可能已经切到别的会话。DB 落库（saveSnapshot）记录的是
+  // 这个 workflow run 自己的真实结果，跟用户当前在看哪个会话无关，原样跑；但
+  // applyWorkflowSnapshot 写的是全局 UI 状态，只在用户还停留在发起这轮验收的会话时才应用，
+  // 否则会把旧会话验收完的快照糊到用户当前正在看的新会话上。
+  const applySnapshotIfStillActive = (snapshot: WorkflowSnapshot | null) => {
+    if (args.conversationIdRef.current === args.conversationId) {
+      args.applyWorkflowSnapshot(snapshot);
+    }
+  };
+  // 2026-07-16 review 修复：这里在跑上面一大段慢验收（toolExecutions 查询 + verifyTask）
+  // 之前先记下这个 run 当时的 snapshot_version——如果这段时间内用户已经发了下一条消息、
+  // prepareTurnWorkflow 更快推进了同一个 run，version 会被推高；下面的 saveSnapshot 调用
+  // 带上这个 expectedVersion 做乐观锁比对，版本不匹配就放弃这次陈旧写入，不会把用户已经
+  // 推进的新状态覆盖回旧状态。读失败（比如 DB 不可用）时 expectedVersion 为 undefined，
+  // 退化成原有的无条件写入行为，不阻塞正常流程。
+  const expectedVersion = await workflowRuns
+    .getById(args.workflowRunId)
+    .then((run) => run?.snapshotVersion)
+    .catch(() => undefined);
   try {
       const currentNode = args.workflowSnapshot.nodes.find(
         (n) => n.id === args.workflowSnapshot!.currentNodeId,
@@ -176,7 +204,7 @@ async function runWorkflowVerificationInBackground(
           evidenceIds,
           verification,
         });
-        await workflowRuns.saveSnapshot({
+        const { applied } = await workflowRuns.saveSnapshot({
           runId: args.workflowRunId,
           snapshot: nextWorkflow,
           eventType: "workflow.node_completed",
@@ -189,11 +217,12 @@ async function runWorkflowVerificationInBackground(
             ...(outcome ? { outcome } : {}),
             ...(verification ? { verificationSummary: verification.humanSummary } : {}),
           },
+          expectedVersion,
         });
-        args.applyWorkflowSnapshot(nextWorkflow);
+        if (applied) applySnapshotIfStillActive(nextWorkflow);
       } else if (outcome.status === "retryable") {
         const nextWorkflow = repairCurrentWorkflowNode({ snapshot: args.workflowSnapshot, outcome });
-        await workflowRuns.saveSnapshot({
+        const { applied } = await workflowRuns.saveSnapshot({
           runId: args.workflowRunId,
           snapshot: nextWorkflow,
           eventType: "workflow.node_repair_retry",
@@ -203,11 +232,12 @@ async function runWorkflowVerificationInBackground(
             repairAttempts: (currentNode?.repairAttempts ?? 0) + 1,
             summaryPreview: finalContent.slice(0, 240),
           },
+          expectedVersion,
         });
-        args.applyWorkflowSnapshot(nextWorkflow);
+        if (applied) applySnapshotIfStillActive(nextWorkflow);
       } else if (outcome.status === "failed" || outcome.status === "blocked") {
         const nextWorkflow = failCurrentWorkflowNode({ snapshot: args.workflowSnapshot, outcome });
-        await workflowRuns.saveSnapshot({
+        const { applied } = await workflowRuns.saveSnapshot({
           runId: args.workflowRunId,
           snapshot: nextWorkflow,
           eventType: outcome.status === "blocked" ? "workflow.node_blocked" : "workflow.node_failed_verification",
@@ -216,16 +246,21 @@ async function runWorkflowVerificationInBackground(
             failureCode: outcome.failureCode,
             summaryPreview: finalContent.slice(0, 240),
           },
+          expectedVersion,
         });
-        args.applyWorkflowSnapshot(nextWorkflow);
+        if (applied) applySnapshotIfStillActive(nextWorkflow);
       } else if (outcome.status === "needs_user") {
         // 2026-07-15 review 修复：不落新事件（跟原设计一致，等用户下一步指示），但节点自己
         // 的 status 要如实改成 "waiting_user"，否则 WorkPanel 会一直把它渲染成"进行中"，
         // 跟真实"已经停下来等你"的状态对不上。不传 eventType 给 saveSnapshot，只落
         // snapshot_json（不写审计事件行），语义上仍然是"没有新事件"。
         const nextWorkflow = markCurrentWorkflowNodeNeedsUser({ snapshot: args.workflowSnapshot });
-        await workflowRuns.saveSnapshot({ runId: args.workflowRunId, snapshot: nextWorkflow });
-        args.applyWorkflowSnapshot(nextWorkflow);
+        const { applied } = await workflowRuns.saveSnapshot({
+          runId: args.workflowRunId,
+          snapshot: nextWorkflow,
+          expectedVersion,
+        });
+        if (applied) applySnapshotIfStillActive(nextWorkflow);
       }
 
       // 阶段4：上报 task_outcomes（Eval Harness 11 指标聚合的源）

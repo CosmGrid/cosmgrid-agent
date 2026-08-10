@@ -106,6 +106,52 @@ describe("prepareTurnWorkflow", () => {
     expect(applySnapshot).toHaveBeenCalledWith(result.snapshot);
   });
 
+  // 2026-07-16 review 修复回归测试：classifier 判定 start_run 时，如果调用方已经带着一个
+  // 正在跑的 run（initialSnapshot 非空），之前直接 create 插入新行，旧行的 status 原样
+  // 停在 running，getActiveByConversation 只按 updated_at 取最新一条，旧行从此没有任何
+  // 代码路径会碰它——永久卡在"活跃"状态污染审计视图。现在应该先把旧 run 标 cancelled
+  // 落库，再创建新 run。
+  it("start_run 判定命中且已有活跃 run → 先把旧 run 标 cancelled 落库，再创建新 run", async () => {
+    const existing = createCodeTaskWorkflowSnapshot({
+      runId: "run-old",
+      conversationId: "conversation-1",
+      objective: "Old task still running",
+      workspacePath: "/workspace",
+    });
+    mocks.classifyTurnIntentWithJudge.mockResolvedValue({
+      action: "start_run",
+      confidence: 0.95,
+      reason: "new implementation task",
+      patch: { objective: "Implement feature B" },
+    });
+    const applySnapshot = vi.fn();
+
+    const result = await prepareTurnWorkflow({
+      conversationId: "conversation-1",
+      projectId: "project-1",
+      pureMode: false,
+      initialSnapshot: existing,
+      text: "Implement feature B",
+      userId: "user-1",
+      intentJudgeModel: null,
+      workspacePath: "/workspace",
+      applySnapshot,
+    });
+
+    // 旧 run 被标成 cancelled 落库了
+    expect(mocks.saveSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-old",
+        snapshot: expect.objectContaining({ runId: "run-old", status: "cancelled" }),
+        eventType: "workflow.superseded_by_new_run",
+      }),
+    );
+    // 新 run 正常创建，且是一个全新的 runId（不是复用旧的）
+    expect(mocks.createRun).toHaveBeenCalledOnce();
+    expect(result.runId).toBeTruthy();
+    expect(result.runId).not.toBe("run-old");
+  });
+
   it("records an observed answer without advancing an existing workflow", async () => {
     const existing = createCodeTaskWorkflowSnapshot({
       runId: "run-1",

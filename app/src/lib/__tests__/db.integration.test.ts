@@ -119,6 +119,8 @@ describe("initSchema", () => {
       "202607160001-model-harness-profiles",
       "202607160002-model-harness-profile-events",
       "202607160003-model-perf-stats-4-indicators",
+      // 2026-07-16 review 修复：workflow_runs 乐观锁计数器（陈旧后台写入 CAS 拒绝）
+      "202607160004-workflow-run-snapshot-version",
       // 阶段7/8（2026-07-11）：Agent Job + 受控 Harness 候选优化
       "202607170001-agent-jobs",
       "202607180001-harness-candidates",
@@ -249,6 +251,57 @@ describe("workflowRuns", () => {
       "workflow.created": 1,
       "workflow.node_waiting_user": 1,
     });
+  });
+
+  // 2026-07-16 review 修复回归测试：复现真实场景——消息 B 的 prepareTurnWorkflow 先推进
+  // 了 run（快），消息 A 的后台验收后写但用的是它开始时读到的旧 snapshot_version（慢）。
+  // 用真实 sqlite 验证：带着陈旧 expectedVersion 的写入应该被 CAS 拒绝、不落库，DB 里
+  // 应该保留 B 那次更新的结果，而不是被 A 的旧数据覆盖回去。
+  it("saveSnapshot 传 expectedVersion 做乐观锁：陈旧写入被拒绝，不覆盖更新的数据", async () => {
+    const conv = await db.conversations.create({ title: "cas workflow conv", projectId: null });
+    const runId = crypto.randomUUID();
+    const snapshot = workflowTemplate.createCodeTaskWorkflowSnapshot({
+      runId,
+      conversationId: conv.id,
+      objective: "CAS 测试",
+      workspacePath: "/tmp/cas-demo",
+    });
+
+    const created = await db.workflowRuns.create({ conversationId: conv.id, snapshot });
+    expect(created.snapshotVersion).toBe(0);
+
+    // B：基于 version 0 快速推进并成功写入。
+    const fromB = { ...snapshot, status: "waiting_user" as const, currentNodeId: "plan" };
+    const resultB = await db.workflowRuns.saveSnapshot({
+      runId,
+      snapshot: fromB,
+      expectedVersion: created.snapshotVersion,
+    });
+    expect(resultB.applied).toBe(true);
+
+    const afterB = await db.workflowRuns.getById(runId);
+    expect(afterB?.status).toBe("waiting_user");
+    expect(afterB?.snapshotVersion).toBe(1);
+
+    // A：也是基于 version 0（它在自己开始跑慢验收之前读到的），这时候已经过期了——
+    // 应该被 CAS 拒绝，不能把 B 刚写的 waiting_user 覆盖回 running。
+    const fromA = { ...snapshot, status: "running" as const, currentNodeId: "read_project" };
+    const resultA = await db.workflowRuns.saveSnapshot({
+      runId,
+      snapshot: fromA,
+      expectedVersion: created.snapshotVersion, // 陈旧的 0，B 已经把它推到 1 了
+    });
+    expect(resultA.applied).toBe(false);
+
+    // DB 里应该仍然是 B 写的结果，没有被 A 的陈旧数据覆盖。
+    const final = await db.workflowRuns.getById(runId);
+    expect(final?.status).toBe("waiting_user");
+    expect(final?.snapshotVersion).toBe(1);
+
+    // 陈旧写入被拒绝时不应该落审计事件——不传 eventType 这里没测事件，但确认事件表没有
+    // 因为 A 的失败写入多出一条。
+    const events = await db.workflowRuns.listEvents(runId);
+    expect(events.map((e) => e.eventType)).toEqual(["workflow.created"]);
   });
 });
 

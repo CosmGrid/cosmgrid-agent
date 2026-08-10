@@ -14,6 +14,7 @@ export interface WorkflowRunRow {
   snapshot_json: string;
   created_at: string;
   updated_at: string;
+  snapshot_version: number;
 }
 
 export interface WorkflowRun {
@@ -26,6 +27,8 @@ export interface WorkflowRun {
   snapshot: WorkflowSnapshot;
   createdAt: string;
   updatedAt: string;
+  /** 乐观锁计数器，见下方 writeSnapshot 的 CAS 注释。 */
+  snapshotVersion: number;
 }
 
 export interface WorkflowEventRow {
@@ -63,6 +66,7 @@ function mapWorkflowRunRow(r: WorkflowRunRow): WorkflowRun {
     snapshot,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    snapshotVersion: r.snapshot_version,
   };
 }
 
@@ -88,33 +92,64 @@ function mapWorkflowEventRow(r: WorkflowEventRow): WorkflowEvent {
  * 按 runId 串行化：同一个 runId 的写入排成队列，前一个写完（无论成功失败）才轮到下一个，
  * 不同 runId 之间互不阻塞。错误被吞掉不重新抛出到队列里，避免一次失败的写永久卡住后续写。
  */
-const snapshotWriteQueues = new Map<string, Promise<void>>();
+const snapshotWriteQueues = new Map<string, Promise<unknown>>();
 
 /** 导出仅供单测直接验证串行化行为（见 __tests__/workflow-runs.test.ts）——不依赖真实 sqlite，
  *  用可控延迟的假 write 函数证明"先调用的先落盘"，而不是"先 resolve 的先落盘"。 */
-export function enqueueSnapshotWrite(runId: string, write: () => Promise<void>): Promise<void> {
+export function enqueueSnapshotWrite<T>(runId: string, write: () => Promise<T>): Promise<T | undefined> {
   const prior = snapshotWriteQueues.get(runId) ?? Promise.resolve();
-  const next = prior.then(write, write).catch(() => {});
+  const next = prior.then(write, write).catch(() => undefined);
   snapshotWriteQueues.set(runId, next);
   return next;
 }
 
+/**
+ * 2026-07-16 review 修复：enqueueSnapshotWrite 只保证"同一个 runId 的写入按调用顺序
+ * 执行"，不保证"数据新鲜度"——一次调用得早但算得慢的写入（比如 stream-finalization.ts
+ * 的 runWorkflowVerificationInBackground，中间横跨好几个 await）依然会排在一次调用得晚
+ * 但算得快的写入（比如用户紧接着发的下一条消息）后面执行，用旧数据把新数据覆盖掉，
+ * 且没有任何报错提示——之前独立复检只发现并修了"调用顺序"这半个问题，这次修的是
+ * "数据新鲜度"那另一半。
+ *
+ * expectedVersion 是可选的乐观锁比对值（调用方在开始计算前读到的 snapshot_version）：
+ * - 传了：UPDATE 带 `AND snapshot_version = $expectedVersion`，如果这段时间内已经有
+ *   更新的写入把版本号推高了，这次 UPDATE 影响 0 行——直接放弃这次陈旧写入（不重试，
+ *   调用方的数据本来就是基于旧状态算出来的，重试也没有意义），返回 { applied: false }。
+ * - 不传（其余几处正常前台推进的调用方，读写之间没有长时间 await 缺口，没有这个风险）：
+ *   保持原有无条件 UPDATE 行为，仍然把 snapshot_version 往前推一格，不影响未来别的
+ *   调用方接入 CAS 检查。
+ */
 async function writeSnapshot(input: {
   runId: string;
   snapshot: WorkflowSnapshot;
   eventType?: string;
   eventPayload?: unknown;
-}): Promise<void> {
+  expectedVersion?: number;
+}): Promise<{ applied: boolean }> {
   const db = await getDb();
   const snapshotJson = JSON.stringify(input.snapshot);
   const currentPhase = currentPhaseOf(input.snapshot);
   const ts = now();
-  await db.execute(
-    `UPDATE workflow_runs
-     SET status = $1, current_phase = $2, snapshot_json = $3, updated_at = $4
-     WHERE id = $5`,
-    [input.snapshot.status, currentPhase, snapshotJson, ts, input.runId],
-  );
+  const result =
+    input.expectedVersion === undefined
+      ? await db.execute(
+          `UPDATE workflow_runs
+           SET status = $1, current_phase = $2, snapshot_json = $3, updated_at = $4,
+               snapshot_version = snapshot_version + 1
+           WHERE id = $5`,
+          [input.snapshot.status, currentPhase, snapshotJson, ts, input.runId],
+        )
+      : await db.execute(
+          `UPDATE workflow_runs
+           SET status = $1, current_phase = $2, snapshot_json = $3, updated_at = $4,
+               snapshot_version = snapshot_version + 1
+           WHERE id = $5 AND snapshot_version = $6`,
+          [input.snapshot.status, currentPhase, snapshotJson, ts, input.runId, input.expectedVersion],
+        );
+  if (result.rowsAffected === 0) {
+    // CAS 未命中：这段时间内已经有更新的写入了，陈旧数据放弃写入，不落事件。
+    return { applied: false };
+  }
   if (input.eventType) {
     await workflowRuns.appendEvent({
       workflowRunId: input.runId,
@@ -123,6 +158,7 @@ async function writeSnapshot(input: {
       payload: input.eventPayload ?? { status: input.snapshot.status, currentPhase },
     });
   }
+  return { applied: true };
 }
 
 export const workflowRuns = {
@@ -178,15 +214,23 @@ export const workflowRuns = {
     return rows[0] ? mapWorkflowRunRow(rows[0]) : null;
   },
 
+  /**
+   * 返回 { applied } 而不是 void：调用方（目前只有 stream-finalization.ts 的后台验收会传
+   * expectedVersion 参与 CAS）可以据此判断这次写入有没有因为陈旧被放弃，从而决定要不要
+   * 跟着把这份陈旧结果应用到当前 UI 状态（applyWorkflowSnapshot）——不传 expectedVersion
+   * 的调用方永远拿到 applied: true，不用改动。
+   */
   async saveSnapshot(input: {
     runId: string;
     snapshot: WorkflowSnapshot;
     eventType?: string;
     eventPayload?: unknown;
-  }): Promise<void> {
+    expectedVersion?: number;
+  }): Promise<{ applied: boolean }> {
     // 按 runId 串行化，见上面 enqueueSnapshotWrite 的注释——避免"点按钮"和"打字发消息"
     // 两条独立调用路径并发写同一个 runId 时，写入完成顺序跟调用顺序不一致导致旧快照覆盖新快照。
-    return enqueueSnapshotWrite(input.runId, () => writeSnapshot(input));
+    const result = await enqueueSnapshotWrite(input.runId, () => writeSnapshot(input));
+    return result ?? { applied: false };
   },
 
   async appendEvent(input: {

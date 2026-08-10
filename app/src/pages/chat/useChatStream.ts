@@ -66,6 +66,12 @@ type ChatUsage = StreamUsage;
 export interface UseChatStreamOptions {
   // 顶层 state
   conversationId: string | null;
+  /**
+   * useConversations() 提供的活体 ref（effect 里同步 conversationId），用来在
+   * finalizeStreamedChatTurn 的后台验收落地前判断用户是不是已经切走了会话——
+   * conversationId 这个闭包值在 handleSend 定义时就已经固定，切会话后不会变。
+   */
+  conversationIdRef: MutableRefObject<string | null>;
   conversationList: Conversation[];
   // getSelectedModelId()/getAvailableModels()/getCredentials() 改为 getter 模式（hook B 持 state + ChatPage 顶层 useState 镜像）——
   // 避免 hook B 持 state → hook C 又依赖的循环
@@ -114,6 +120,7 @@ export interface UseChatStreamOptions {
 export function useChatStream(opts: UseChatStreamOptions) {
   const {
     conversationId,
+    conversationIdRef,
     conversationList,
     getSelectedModelId,
     setSelectedModelId,
@@ -674,7 +681,22 @@ export function useChatStream(opts: UseChatStreamOptions) {
           setHarnessNotice,
           setStreamActivityPhase,
         });
-        if (streamingResult.aborted) return;
+        if (streamingResult.aborted) {
+          // 2026-07-16 review 修复：这是"优雅 abort"路径（runChatStreamRuntime 检测到
+          // controller.signal.aborted 后正常 return，不抛异常），跟下面 catch 块里的
+          // AbortError 异常路径是同一个用户动作（点停止）触发的两条不同代码路径，但只有
+          // catch 块补了 persistAssistant——这里原来是裸 return，已经流出显示在 UI 上的
+          // 部分内容从未落库，切会话再切回来 / 重启 app 后这条回复会整个消失。跟 catch 块
+          // 保持同样的处理：落库已流出的部分内容，内容为空才落"已停止"占位。
+          const partialContent = streamingResult.fullContent;
+          prep.persistAssistant(partialContent, streamingResult.lastModelId);
+          if (!partialContent) {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: t("chat.stopped") } : m)),
+            );
+          }
+          return;
+        }
         const finalized = await finalizeStreamedChatTurn({
           text,
           assistantId,
@@ -690,6 +712,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           persistAssistant: prep.persistAssistant,
           setMessages,
           applyWorkflowSnapshot,
+          conversationIdRef,
         });
         finalContent = finalized.finalContent;
         setHarnessNotice(null);

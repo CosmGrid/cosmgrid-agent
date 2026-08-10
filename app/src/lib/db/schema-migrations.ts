@@ -652,4 +652,24 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       );
     },
   },
+  {
+    version: "202607160004-workflow-run-snapshot-version",
+    description:
+      "2026-07-16 review 修复：workflow_runs 之前用不带版本号的 UPDATE ... WHERE id=$runId，" +
+      "谁调用得晚谁的写入生效——enqueueSnapshotWrite 只保证按调用顺序执行，不保证数据新鲜度。" +
+      "典型场景：finalizeStreamedChatTurn 的后台工作流验收（stream-finalization.ts 的 " +
+      "runWorkflowVerificationInBackground）是 fire-and-forget，可能跑很久；这段时间内用户" +
+      "发了下一条消息、prepareTurnWorkflow 更快推进了同一个 run，慢的那次验收算完后用它" +
+      "开始时读到的旧快照写回去，会把用户已经推进的新状态静默覆盖回旧状态。" +
+      "snapshot_version 是乐观锁计数器：每次成功 UPDATE 都 +1；" +
+      "runWorkflowVerificationInBackground 在开始跑之前先记下这个 run 当时的 " +
+      "snapshot_version，真正写回时带上这个值做 CAS（WHERE snapshot_version = 期望值），" +
+      "如果这段时间内已经有更新的写入把版本号推高了，这次陈旧的写入就不会生效——不是重试，" +
+      "是直接放弃这次陈旧写入（调用方数据本来就是基于旧状态算出来的，重试意义不大）。" +
+      "不传 expectedVersion 的调用方（其余几处正常前台推进）行为不变，仍是无条件写入，" +
+      "只是顺带把版本号往前推，给未来可能补充 CAS 检查的调用方留好底子。",
+    up: async (db) => {
+      await addColumnIfMissing(db, "workflow_runs", "snapshot_version", "INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];

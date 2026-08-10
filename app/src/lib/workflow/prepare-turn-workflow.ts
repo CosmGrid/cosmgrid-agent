@@ -83,6 +83,31 @@ export async function prepareTurnWorkflow(
     captureIntentDiagnostics(options.text, decision, learnedExamples);
 
     if (decision.action === "start_run") {
+      // 2026-07-16 review 修复：start_run 之前如果已经有一个正在跑的 run（snapshot 非空，
+      // 来自本轮上面 options.initialSnapshot 或 getActiveByConversation 查到的活跃 run），
+      // 之前这里直接 workflowRuns.create 插入新行，旧行的 status 原样留在
+      // running/waiting_user/paused，getActiveByConversation 只按 updated_at 取最新一条，
+      // 旧行从此再也没有任何代码路径会碰它——永久卡在"活跃"状态，污染审计视图
+      // （getAuditSummary/会话工作流历史）。这里先把旧 run 标成 cancelled 落库（复用
+      // applyTurnIntentDecision 的 cancel_run 分支同一套终态转换逻辑），再创建新 run。
+      if (snapshot) {
+        const cancelledOldSnapshot = applyTurnIntentDecision({
+          snapshot,
+          decision: {
+            action: "cancel_run",
+            targetRunId: snapshot.runId,
+            confidence: 1,
+            reason: "start_run classifier 判定开启新任务，旧 run 视为被取代",
+            evidenceTurnIds: [],
+          },
+        });
+        await workflowRuns.saveSnapshot({
+          runId: cancelledOldSnapshot.runId,
+          snapshot: cancelledOldSnapshot,
+          eventType: "workflow.superseded_by_new_run",
+          eventPayload: { reason: "start_run classifier 判定开启新任务，旧 run 视为被取代" },
+        });
+      }
       runId = crypto.randomUUID();
       snapshot = createCodeTaskWorkflowSnapshot({
         runId,

@@ -42,6 +42,16 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
   const { t } = useTranslation();
   const { confirm, alert } = useConfirm();
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // 2026-07-16 review 修复：finalizeStreamedChatTurn 的后台工作流验收（stream-finalization.ts
+  // 的 runWorkflowVerificationInBackground）跨多个 await，落地时用户可能已经切到别的会话——
+  // 传这个 ref 而不是 conversationId 闭包值，让它能读到"落地那一刻"真实的当前会话，
+  // 而不是"发起验收那一刻"的会话。注意：下面 useConversations() 也返回一个同名 ref，但那个
+  // hook 自己的 conversationId state 从没被写过（setConversationId 被 void 掉，是阶段 8
+  // 迁移未完成的孤儿状态），不能拿来用，这里必须镜像真正驱动页面的这个顶层 conversationId。
+  const conversationIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
   const [conversationList, setConversationList] = useState<Conversation[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [permissionMode, setPermissionMode] = usePermissionModeSetting();
@@ -200,6 +210,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     handleStop,
   } = useChatStream({
     conversationId,
+    conversationIdRef,
     conversationList,
     getSelectedModelId: () => selectedModelId,
     setSelectedModelId,
