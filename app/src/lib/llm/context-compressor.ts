@@ -41,8 +41,68 @@ export function estimateTokens(content: string | UserContentPart[]): number {
   return Math.ceil(len / 3) + images * 1000;
 }
 
+/**
+ * 估算一条 assistant 轮「真实展开」的 ModelMessage 序列（parts）的 token 数。
+ *
+ * 发送边界（splitSystemFromMessages）会原样展开 `parts` 回放，而不是用 `content` 散文压平——
+ * 所以真实成本在 parts 里：工具结果、读入的文件内容（可能上万字符）都在这里。原 estimateTokens
+ * 只看 `content`，会严重低估含工具/文件的长上下文，导致压缩永远不触发（B1 根因）。
+ */
+function safeSerializedLength(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (value === undefined) return 0;
+  if (typeof value === "bigint") return value.toString().length;
+  try {
+    const serialized = JSON.stringify(
+      value,
+      (_key, nested) => typeof nested === "bigint" ? nested.toString() : nested,
+    );
+    return serialized?.length ?? 0;
+  } catch {
+    // ModelMessage 正常应可 JSON 序列化；若插件塞入循环对象等异常值，宁可保守多估，
+    // 也不能让 token 预估本身抛错、阻断整轮对话。
+    return 1_024;
+  }
+}
+
+function estimatePartsTokens(parts: ModelMessage[]): number {
+  let total = 0;
+  for (const pm of parts) {
+    const c = pm.content;
+    if (typeof c === "string") {
+      total += Math.ceil(c.length / 3);
+      continue;
+    }
+    for (const part of c) {
+      // AI SDK 各版本 part 形状不完全一致，宽松取值避免类型摩擦
+      const p = part as {
+        type?: string;
+        text?: string;
+        input?: unknown;
+        output?: unknown;
+        result?: unknown;
+        args?: unknown;
+        [k: string]: unknown;
+      };
+      if (p.type === "text") total += Math.ceil((p.text?.length ?? 0) / 3);
+      else if (p.type === "tool-result") {
+        const output = "output" in p ? p.output : p.result;
+        total += Math.ceil(safeSerializedLength(output) / 3);
+      } else if (p.type === "tool-call") {
+        const input = "input" in p ? p.input : p.args;
+        total += Math.ceil(safeSerializedLength(input) / 3);
+      } else if (p.type === "image" || p.type === "file") total += 1000;
+      else total += Math.ceil(safeSerializedLength(p) / 3);
+    }
+  }
+  return total;
+}
+
 export function estimateMessagesTokens(messages: ChatMsg[]): number {
-  return messages.reduce((sum, m) => sum + estimateTokens(m.content) + 4, 0);
+  return messages.reduce((sum, m) => {
+    const base = m.parts && m.parts.length > 0 ? estimatePartsTokens(m.parts) : estimateTokens(m.content);
+    return sum + base + 4;
+  }, 0);
 }
 
 export interface CompressResult {
@@ -108,11 +168,13 @@ function splitByBudget(
 
   let budget = maxTokens - systemTokens;
   const kept: ChatMsg[] = [];
-  let dropStartIndex = nonSystem.length;
+  // 若所有非 system 消息都因 minRecent 规则被保留，丢弃区间应为空。
+  // 只有真正遇到第一条放不下的旧消息时，才把边界推进到 i + 1。
+  let dropStartIndex = 0;
 
   for (let i = nonSystem.length - 1; i >= 0; i--) {
     const m = nonSystem[i]!;
-    const cost = estimateTokens(m.content) + 4;
+    const cost = (m.parts && m.parts.length > 0 ? estimatePartsTokens(m.parts) : estimateTokens(m.content)) + 4;
     if (kept.length < minRecent || budget - cost >= 0) {
       kept.unshift(m);
       budget -= cost;

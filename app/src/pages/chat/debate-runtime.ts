@@ -55,7 +55,8 @@ interface RunDebateRuntimeOptions {
     SetStateAction<Array<{ modelId: string; modelName: string }> | null>
   >;
   markStickToBottom: () => void;
-  clearAbortController: () => void;
+  isCurrentTurn: () => boolean;
+  releaseTurnState: () => boolean;
 }
 
 export function shouldRunDebateTurn(args: {
@@ -82,6 +83,7 @@ export async function runDebateRuntime(
   ) {
     return false;
   }
+  if (!options.isCurrentTurn()) return true;
 
   const { conversationId, workspacePath } = options.prep;
   const projectId =
@@ -121,11 +123,15 @@ export async function runDebateRuntime(
       });
       activeSnapshot = debateSnapshot;
       activeRunId = runId;
-      options.applyWorkflowSnapshot(debateSnapshot);
+      if (options.isCurrentTurn()) {
+        options.applyWorkflowSnapshot(debateSnapshot);
+      }
     } catch {
       // A temporary workflow failure does not block debate.
     }
   }
+
+  if (!options.isCurrentTurn()) return true;
 
   const assistantId = crypto.randomUUID();
   const estimatedParticipants = Math.min(
@@ -176,6 +182,7 @@ export async function runDebateRuntime(
       signal: options.controller.signal,
       t: options.t,
       onParticipants: (participants) => {
+        if (!options.isCurrentTurn()) return;
         options.setDebateParticipants(
           participants.map((participant) => {
             const found = options.availableModels.find(
@@ -190,6 +197,8 @@ export async function runDebateRuntime(
         );
       },
     });
+
+    if (!options.isCurrentTurn()) return true;
 
     options.setMessages((previous) =>
       previous.map((message) =>
@@ -238,46 +247,54 @@ export async function runDebateRuntime(
           })),
         },
       });
-      options.applyWorkflowSnapshot(nextWorkflow);
+      if (options.isCurrentTurn()) {
+        options.applyWorkflowSnapshot(nextWorkflow);
+      }
     }
   } catch (error) {
     if ((error as Error).name === "AbortError") {
-      options.setMessages((previous) =>
-        previous.map((message) =>
-          message.id === assistantId
-            ? { ...message, content: options.t("chat.stopped") }
-            : message,
-        ),
-      );
+      if (options.isCurrentTurn()) {
+        options.setMessages((previous) =>
+          previous.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: options.t("chat.stopped") }
+              : message,
+          ),
+        );
+      }
       await updateFailedWorkflow(
         "cancelled",
         activeSnapshot,
         activeRunId,
         options.applyWorkflowSnapshot,
+        options.isCurrentTurn,
       );
       return true;
     }
 
     const message =
       error instanceof Error ? error.message : options.t("chat.debate.failed");
-    options.setMessages((previous) =>
-      previous.map((item) =>
-        item.id === assistantId ? { ...item, content: message } : item,
-      ),
-    );
-    options.prep.persistAssistant(message, null);
-    options.setStreamError(message);
+    if (options.isCurrentTurn()) {
+      options.setMessages((previous) =>
+        previous.map((item) =>
+          item.id === assistantId ? { ...item, content: message } : item,
+        ),
+      );
+      options.prep.persistAssistant(message, null);
+      options.setStreamError(message);
+    }
     await updateFailedWorkflow(
       "failed",
       activeSnapshot,
       activeRunId,
       options.applyWorkflowSnapshot,
+      options.isCurrentTurn,
       message,
     );
   } finally {
-    options.setIsStreaming(false);
-    options.setDebateParticipants(null);
-    options.clearAbortController();
+    if (options.releaseTurnState()) {
+      options.setDebateParticipants(null);
+    }
   }
   return true;
 }
@@ -287,6 +304,7 @@ async function updateFailedWorkflow(
   snapshot: WorkflowSnapshot | null,
   runId: string | null,
   applySnapshot: (snapshot: WorkflowSnapshot) => void,
+  isCurrentTurn: () => boolean,
   message?: string,
 ): Promise<void> {
   if (!snapshot || !runId) return;
@@ -311,5 +329,5 @@ async function updateFailedWorkflow(
         status === "cancelled" ? { reason: "user_stopped" } : { message },
     })
     .catch(() => {});
-  applySnapshot(next);
+  if (isCurrentTurn()) applySnapshot(next);
 }

@@ -19,6 +19,7 @@ import { z } from "zod";
 import type { LanguageModel } from "./provider-factory";
 import { resolveMaxOutputTokens } from "./model-limits";
 import type { ChatMsg } from "./context-compressor";
+import { createAbortScope } from "./abort-scope";
 
 /** 单条消息硬截断阈值——避免 dropped 多条长消息堆爆 prompt */
 const MAX_DROPPED_MESSAGE_CHARS = 2000;
@@ -48,6 +49,7 @@ export type HistorySummary = z.infer<typeof historySummarySchema>;
 export async function summarizeDroppedHistory(
   dropped: ChatMsg[],
   model: LanguageModel,
+  abortSignal?: AbortSignal,
 ): Promise<HistorySummary | null> {
   if (dropped.length === 0) return null;
 
@@ -63,11 +65,13 @@ export async function summarizeDroppedHistory(
     })
     .join("\n\n");
 
+  const abortScope = createAbortScope(abortSignal, 30_000);
   try {
     const { object } = await generateObject({
       model,
       schema: historySummarySchema,
       maxOutputTokens: resolveMaxOutputTokens(model.modelId),
+      abortSignal: abortScope.signal,
       prompt: `你是一个对话上下文压缩助手。下面是一段将被"丢弃"出上下文窗口的早期对话记录，
 你的任务是把它浓缩成结构化摘要，让后续轮次的模型不需要读原始对话也能保留这些关键信息。
 
@@ -98,5 +102,7 @@ ${transcript}`,
   } catch {
     // 失败一律返回 null，调用方退回抽取式——绝不抛错阻断发送
     return null;
+  } finally {
+    abortScope.dispose();
   }
 }

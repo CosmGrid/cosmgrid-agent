@@ -4,7 +4,7 @@ export interface AssistantModelMessage {
   modelLabel?: string;
 }
 
-export type StreamActivityPhase = "idle" | "streaming" | "checking";
+export type StreamActivityPhase = "idle" | "streaming" | "checking" | "compressing";
 
 export function getActiveAssistantModelLabel(
   messages: readonly AssistantModelMessage[],

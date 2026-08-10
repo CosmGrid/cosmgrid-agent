@@ -21,6 +21,10 @@ export interface PrepareChatPromptRuntimeArgs {
   smartRoutingEnabled: boolean;
   summarizeModel: LanguageModel | null;
   conversationId: string | null;
+  /** 本轮 AbortSignal，透传给摘要 LLM（B3） */
+  abortSignal?: AbortSignal;
+  /** 压缩真正发生前的回调（诊断可见性） */
+  onCompressStart?: () => void;
   labels: {
     fileTooLarge: (name: string) => string;
     contextTrimmed: (count: number) => string;
@@ -54,6 +58,8 @@ export async function prepareChatPromptRuntime(
     contextWindow: args.model.contextWindow,
     noticeText: args.labels.contextTrimmed,
     summarizeModel: args.summarizeModel ?? undefined,
+    abortSignal: args.abortSignal,
+    onCompressStart: args.onCompressStart,
     persistence: args.conversationId
       ? {
         conversationId: args.conversationId,

@@ -62,6 +62,7 @@ import {
 } from "@/pages/chat/chat-stream-effects";
 import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
 import type { ChatMessage, PendingRoutingDecision, PendingSend } from "@/pages/chat/types";
+import { releaseTurnIfCurrent } from "@/pages/chat/turn-ownership";
 
 type ChatUsage = StreamUsage;
 
@@ -98,7 +99,7 @@ export interface UseChatStreamOptions {
   // hook E (work panel)
   applyToolExecutionRows: (rows: ToolExecutionRow[]) => void;
   requestConfirm: (req: ToolConfirmRequest) => Promise<boolean>;
-  requestAskUser: (req: AskUserRequest) => Promise<string>;
+  requestAskUser: (req: AskUserRequest) => Promise<string | null>;
 
   // hook F + 顶层 ref
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -146,6 +147,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
   const [streamActivityPhase, setStreamActivityPhase] = useState<StreamActivityPhase>("idle");
   const [pendingQueue, setPendingQueue] = useState<PendingSend[]>([]);
   const drainingRef = useRef(false);
+  const drainVersionRef = useRef(0);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
@@ -171,18 +173,23 @@ export function useChatStream(opts: UseChatStreamOptions) {
     const effectiveId =
       nodeModelId && getAvailableModels().some((m) => m.id === nodeModelId) ? nodeModelId : getSelectedModelId();
     const foundModel = getAvailableModels().find((m) => m.id === effectiveId);
-    if (!foundModel || isStreaming) return;
+    if (!foundModel) {
+      setStreamError(t("chat.noModels"));
+      return;
+    }
+    if (isStreaming) return;
     const model: ModelListItem = foundModel;
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const cleanupStoppedTurn = () => {
+    const isCurrentTurn = () =>
+      abortRef.current === controller && !controller.signal.aborted;
+    const cleanupStoppedTurn = () => releaseTurnIfCurrent(abortRef, controller, () => {
       setIsStreaming(false);
       setStreamActivityPhase("idle");
-      if (abortRef.current === controller) abortRef.current = null;
-    };
+    });
     const stopIfAborted = () => {
-      if (!controller.signal.aborted) return false;
+      if (isCurrentTurn()) return false;
       cleanupStoppedTurn();
       return true;
     };
@@ -234,6 +241,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         getApiKey,
         isAborted: () => controller.signal.aborted,
       });
+      if (stopIfAborted()) return null;
       if (!preparedModels.ok) {
         if (preparedModels.reason === "missing-credential") {
           setStreamError(t("chat.noCredential"));
@@ -271,9 +279,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
         attachments,
         isFirstMessage,
         isAborted: () => controller.signal.aborted,
-        onPersistenceFailure: () => setPersistNotice(t("chat.persistFailed")),
+        onPersistenceFailure: () => {
+          if (isCurrentTurn()) setPersistNotice(t("chat.persistFailed"));
+        },
       });
-      if (persistedTurn.aborted) return null;
+      if (persistedTurn.aborted || stopIfAborted()) return null;
       const {
         conversationId: convId,
         userId: persistedUserId,
@@ -293,7 +303,10 @@ export function useChatStream(opts: UseChatStreamOptions) {
         userId,
         intentJudgeModel,
         workspacePath: effectiveWorkspace,
-        applySnapshot: applyWorkflowSnapshot,
+        applySnapshot: (snapshot) => {
+          if (isCurrentTurn()) applyWorkflowSnapshot(snapshot);
+        },
+        abortSignal: controller.signal,
       });
       const {
         snapshot: turnWorkflowSnapshot,
@@ -359,9 +372,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
         markStickToBottom: () => {
           stickToBottomRef.current = true;
         },
-        clearAbortController: () => {
-          if (abortRef.current === controller) abortRef.current = null;
-        },
+        isCurrentTurn,
+        releaseTurnState: cleanupStoppedTurn,
       });
     }
 
@@ -407,6 +419,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         setCacheNotice,
         setPersistNotice,
         onCacheHitDone: cleanupStoppedTurn,
+        isCurrentTurn,
       });
 
       if (cacheResult.hit) return { hit: true };
@@ -464,6 +477,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           pureMode,
         });
       } catch (err) {
+        if (!isCurrentTurn()) return;
         setStreamError(err instanceof Error ? err.message : t("chat.constructError"));
         cleanupStoppedTurn();
         return;
@@ -491,6 +505,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         },
         setMessages,
       });
+      if (stopIfAborted()) return;
 
       // K7 能力门控的允许集来自「当前工作流阶段」策略（已与 skill 解耦，见 phase-capabilities.ts）。
       // 必须在工具构建前算出：ctx 在 buildAiSdkTools 时定型，之后才执行。
@@ -510,6 +525,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       } catch {
         activeSkillDefs = undefined;
       }
+      if (stopIfAborted()) return;
       const selectedSkill = selectSkillForTurn({
         text,
         workflowSnapshot: activeTurnWorkflowSnapshot,
@@ -542,6 +558,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
         desktopPath,
         fs: getFsAdapter(),
       });
+      if (stopIfAborted()) return;
       if (desktopPlan && convId && activeTurnWorkflowSnapshot && turnWorkflowRunId) {
         const nextWorkflow = attachPlanSourceToWorkflow({
           snapshot: activeTurnWorkflowSnapshot,
@@ -561,6 +578,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           eventType: "workflow.plan_source_attached",
           eventPayload: { path: desktopPlan.path },
         }).catch(() => {});
+        if (stopIfAborted()) return;
         activeTurnWorkflowSnapshot = nextWorkflow;
         applyWorkflowSnapshot(nextWorkflow);
       }
@@ -583,6 +601,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
           eventType: "workflow.skill_selected",
           eventPayload: { skillId: selectedSkill.id, reason: selectedSkill.reason },
         }).catch(() => {});
+        if (stopIfAborted()) return;
         activeTurnWorkflowSnapshot = nextWorkflow;
         applyWorkflowSnapshot(nextWorkflow);
       }
@@ -630,11 +649,18 @@ export function useChatStream(opts: UseChatStreamOptions) {
         smartRoutingEnabled: smart,
         summarizeModel: auxiliaryJudgeModel?.model ?? null,
         conversationId: convId,
+        abortSignal: controller.signal,
         labels: {
           fileTooLarge: (name) => t("chat.attachments.fileTooLarge", { name }),
           contextTrimmed: (count) => t("chat.contextTrimmed", { count }),
         },
+        // 诊断可见性（2026-08-05）：长对话触发压缩时短暂显示「正在压缩历史」，让用户知道
+        // 这一拍在干什么、不是卡死。stream-runtime 拿到首字后会把它切回 checking/streaming。
+        onCompressStart: () => {
+          if (isCurrentTurn()) setStreamActivityPhase("compressing");
+        },
       });
+      if (stopIfAborted()) return;
       const outgoing = promptRuntime.messages;
       const compressionStats = promptRuntime.compressionStats;
 
@@ -707,7 +733,7 @@ export function useChatStream(opts: UseChatStreamOptions) {
       } catch (err) {
         const partialContent = streamingResult?.fullContent ?? "";
         prep.persistAssistant(partialContent, model.id);
-        setHarnessNotice(null);
+        if (abortRef.current === controller) setHarnessNotice(null);
         if ((err as Error).name === "AbortError") {
           if (!partialContent) {
             setMessages((prev) =>
@@ -716,6 +742,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
           }
           return;
         }
+        // Stop 后新一轮可能已经接管 abortRef。旧轮的晚到错误不能覆盖新轮的全局错误状态。
+        if (abortRef.current !== controller) return;
         const classified = classifyLlmError(err, t);
         const isCliError = typeof err === "object" && err !== null && "__cliKind" in err;
         const lowInfo =
@@ -729,10 +757,8 @@ export function useChatStream(opts: UseChatStreamOptions) {
         );
         setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content !== ""));
       } finally {
-        setIsStreaming(false);
-        setStreamActivityPhase("idle");
-        abortRef.current = null;
-        if (convId) {
+        const released = cleanupStoppedTurn();
+        if (released && convId) {
           void toolExecutions.listByConversation(convId).then(applyToolExecutionRows).catch(() => {});
         }
       }
@@ -800,6 +826,12 @@ export function useChatStream(opts: UseChatStreamOptions) {
     chainAbortRef.current?.abort();
     abortRef.current = null;
     chainAbortRef.current = null;
+    // 关键修复（2026-08-05，兜底 Stop）：原 handleStop 只重置了 isStreaming，没重置 drainingRef。
+    // 某轮若因 await 挂死（确认弹窗没 resolve / 辅助 LLM 调用超时，B2/B3），drainingRef 永久卡
+    // true，导致此后所有消息在 usePendingSendDrain 里被静默丢弃——"点停止也没用"。这里显式
+    // 解锁闸门，配合 ChatPage 的 stopAll（同时 forceResolve 掉挂起的确认/追问），保证一键解开。
+    drainVersionRef.current += 1;
+    drainingRef.current = false;
     setPendingQueue([]);
     setIsStreaming(false);
     setStreamActivityPhase("idle");
@@ -812,7 +844,11 @@ export function useChatStream(opts: UseChatStreamOptions) {
 
   usePendingSendDrain({
     drainingRef,
+    drainVersionRef,
     isStreaming,
+    onError: (error) => {
+      setStreamError(error instanceof Error ? error.message : t("chat.constructError"));
+    },
     pendingQueue,
     sendRef: handleSendRef,
     setPendingQueue,

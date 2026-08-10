@@ -148,6 +148,8 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     requestConfirm,
     resolveAskUser,
     resolveConfirm,
+    forceResolveConfirm,
+    forceResolveAskUser,
     bindWorkspace,
     chooseWorkspace,
     clearWorkspace,
@@ -219,6 +221,16 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     t,
   });
 
+  // 兜底 Stop 解挂（2026-08-05）：handleStop 已重置 drainingRef + isStreaming，但这里再强制
+  // resolve 掉任何挂起的「工具确认 / 追问」——否则 handleStop 解开了闸门，可那一轮仍在
+  // await requestConfirm 里，确认 resolver 永不触发，turn 永远走不到 finally。三件套一起清，
+  // 保证卡死（B2 确认没 resolve / B3 辅助调用超时）时一键彻底解开。
+  function stopAll() {
+    handleStop();
+    forceResolveConfirm(false);
+    forceResolveAskUser();
+  }
+
   // hook B：模型选择（在 hook C 之后——hook B 依赖 hook C 的 messages + setSwitchNotice）
   const {
     handleModelChange,
@@ -264,7 +276,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // 且没有任何提示——跟 handleStop（停止键）"权威停止：不管底层卡没卡死，直接把 UI
     // 拉回空闲态"是同一个思路：新建对话本身就是"我要放弃当前这轮，另起一个"的明确意图，
     // 应该强制中断当前流，而不是被它卡住拒绝响应。
-    if (isStreaming) handleStop();
+    if (isStreaming) stopAll();
     try {
       const conv = await dbConversations.create({ title: t("chat.untitledChat"), defaultModelId: selectedModelId || null, projectId: null });
       setConversationList((prev) => [conv, ...prev]);
@@ -289,7 +301,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     if (id === conversationId) return;
     // 修复（2026-07-03）：同 handleNewChat——切换对话也是"放弃当前这轮"的明确意图，
     // isStreaming 卡住时应该强制停止而不是拒绝响应。
-    if (isStreaming) handleStop();
+    if (isStreaming) stopAll();
     const nextConv = conversationList.find((c) => c.id === id) ?? null;
     setConversationId(id);
     setWorkspacePath(nextConv?.workspacePath ?? null);
@@ -322,7 +334,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
     // 修复（2026-07-06，用户反馈"最后一个对话删不掉"）：同 handleNewChat/switchConversation
     // ——这里原来是 isStreaming 时直接 return，isStreaming 卡在 true 时点删除会被静默拦截、
     // 且没有任何提示。删除同样是"放弃当前这轮"的明确意图，应强制停止当前流而不是拒绝响应。
-    if (isStreaming) handleStop();
+    if (isStreaming) stopAll();
     if (!(await confirm({ description: t("chat.deleteConvConfirm"), destructive: true }))) return;
     try {
       await dbConversations.archive(id);
@@ -632,6 +644,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         activeToolCall={activeToolCall}
         isStreaming={isStreaming}
         streamActivityPhase={streamActivityPhase}
+        streamElapsedMs={streamElapsedMs}
         workspacePath={workspacePath}
         onClearWorkspace={() => void clearWorkspace()}
         onChooseWorkspace={() => void chooseWorkspace()}
@@ -640,7 +653,7 @@ export function ChatPage({ active = true }: ChatPageProps = {}) {
         draftAttachments={draftAttachments}
         onRemoveAttachment={removeAttachment}
         selectedModelName={selectedModel ? selectedModel.displayName || selectedModel.name : null}
-        onStop={handleStop}
+        onStop={stopAll}
         pendingConfirm={pendingConfirm}
         onResolveConfirm={resolveConfirm}
         pendingQuestion={pendingQuestion}

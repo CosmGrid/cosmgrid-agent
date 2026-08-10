@@ -38,6 +38,7 @@ export interface RunSemanticCacheRuntimeArgs {
   setCacheNotice: Dispatch<SetStateAction<string | null>>;
   setPersistNotice: Dispatch<SetStateAction<string | null>>;
   onCacheHitDone: () => void;
+  isCurrentTurn: () => boolean;
 }
 
 export type SemanticCacheRuntimeResult =
@@ -52,6 +53,8 @@ export type SemanticCacheRuntimeResult =
 export async function runSemanticCacheRuntime(
   args: RunSemanticCacheRuntimeArgs,
 ): Promise<SemanticCacheRuntimeResult> {
+  if (!args.isCurrentTurn()) return { hit: true };
+
   const assistantId = crypto.randomUUID();
   const assistantMsg: ChatMessage = {
     id: assistantId,
@@ -80,24 +83,29 @@ export async function runSemanticCacheRuntime(
     turnIntentDecision: args.turnIntentDecision,
     intentJudgeModel: args.intentJudgeModel,
   });
+  if (!args.isCurrentTurn()) return { hit: true };
 
   if (preparedCache.cacheEligible) {
+    let hit: Awaited<ReturnType<typeof lookupCache>> = null;
     try {
-      const hit = await lookupCache(args.text);
-      if (hit) {
-        const days = Math.max(0, Math.floor(hit.ageMs / 86_400_000));
-        args.setMessages((prev) =>
-          prev.map((message) =>
-            message.id === assistantId ? { ...message, content: hit.responseText } : message,
-          ),
-        );
-        args.persistAssistant(hit.responseText, args.modelId);
-        args.setCacheNotice(args.cacheHitLabel(days));
-        args.onCacheHitDone();
-        return { hit: true };
-      }
+      hit = await lookupCache(args.text);
     } catch {
       // 缓存查询失败不影响主流程，继续走真实模型。
+    }
+    // Stop 后查询 Promise 仍可能晚到。此时把旧轮视为已经结束，但不得再写消息、
+    // 持久化答案或清理由新轮持有的全局状态。
+    if (!args.isCurrentTurn()) return { hit: true };
+    if (hit) {
+      const days = Math.max(0, Math.floor(hit.ageMs / 86_400_000));
+      args.setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantId ? { ...message, content: hit.responseText } : message,
+        ),
+      );
+      args.persistAssistant(hit.responseText, args.modelId);
+      args.setCacheNotice(args.cacheHitLabel(days));
+      args.onCacheHitDone();
+      return { hit: true };
     }
   }
 

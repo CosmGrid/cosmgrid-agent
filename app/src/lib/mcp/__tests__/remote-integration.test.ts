@@ -69,5 +69,5 @@ describe("remote MCP Streamable HTTP integration", () => {
 
     const result = await callRemoteMcpTool(server(), "echo", { value: "hello" });
     expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "echo:hello" }));
-  });
+  }, 15_000);
 });

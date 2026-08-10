@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { conversations as dbConversations } from "@/lib/db";
+import { conversations as dbConversations, type ToolExecutionRow } from "@/lib/db";
 import { type ToolConfirmRequest, type AskUserRequest } from "@/lib/llm/tools";
 import { deriveArtifacts, type WorkArtifact } from "@/lib/work-artifacts";
 import { deriveToolCallViews, type ToolCallView } from "@/lib/work-artifact-views";
-import type { ToolExecutionRow } from "@/lib/db";
+import {
+  createSequentialRequestQueue,
+  type SequentialRequestQueue,
+} from "@/pages/chat/sequential-request-queue";
 
 export interface UseWorkPanelOptions {
   conversationId: string | null;
@@ -47,36 +50,51 @@ export function useWorkPanel({
   const [toolCallViews, setToolCallViews] = useState<ToolCallView[]>([]);
 
   // 工具确认流：Promise 化的 requestConfirm + resolveConfirm + 键盘 effect
+  // 修复（2026-08-05，B2）：原实现是「单槽」——同一轮若连续两次 requestConfirm（工具调用多、
+  // 需多次确认时常见），第二个会覆盖 pendingConfirm 与 confirmResolverRef.current，导致第一个
+  // 的 await 永远等不到 resolve，整轮卡死、drainingRef 永久锁住、之后所有消息静默丢弃。
+  // 改为队列：已有确认在等时，后续请求入队，当前确认 resolve 后再弹出下一个。UI 始终只展示当前这一个。
   const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
-  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+  const confirmQueueRef = useRef<SequentialRequestQueue<ToolConfirmRequest, boolean> | null>(null);
+  if (!confirmQueueRef.current) {
+    confirmQueueRef.current = createSequentialRequestQueue<ToolConfirmRequest, boolean>(
+      (request) => setPendingConfirm(request),
+    );
+  }
+  const confirmQueue = confirmQueueRef.current;
 
   function requestConfirm(req: ToolConfirmRequest): Promise<boolean> {
-    return new Promise((resolve) => {
-      setPendingConfirm(req);
-      confirmResolverRef.current = resolve;
-    });
+    return confirmQueue.request(req);
   }
   function resolveConfirm(ok: boolean): void {
-    confirmResolverRef.current?.(ok);
-    confirmResolverRef.current = null;
-    setPendingConfirm(null);
+    confirmQueue.resolveCurrent(ok);
+  }
+  /** 强制清空所有待确认（供「停止」按钮解挂）：当前在等的 + 队列里排队的全部 resolve 为 false */
+  function forceResolveConfirm(ok: boolean): void {
+    confirmQueue.resolveAll(ok);
   }
 
   // ask_user_question 工具的追问流：跟 confirm 同一套 Promise 化模式，但返回的是用户选中的
   // label 文本而非布尔值——语义不同（"问问题"vs"批准/拒绝"），故意不复用 pendingConfirm。
+  // 修复（2026-08-05，B2）：同样有「单槽覆盖」缺陷，改为队列，并补 forceResolveAskUser 供停止解挂。
   const [pendingQuestion, setPendingQuestion] = useState<AskUserRequest | null>(null);
-  const questionResolverRef = useRef<((answer: string) => void) | null>(null);
+  const questionQueueRef = useRef<SequentialRequestQueue<AskUserRequest, string | null> | null>(null);
+  if (!questionQueueRef.current) {
+    questionQueueRef.current = createSequentialRequestQueue<AskUserRequest, string | null>(
+      (request) => setPendingQuestion(request),
+    );
+  }
+  const questionQueue = questionQueueRef.current;
 
-  function requestAskUser(req: AskUserRequest): Promise<string> {
-    return new Promise((resolve) => {
-      setPendingQuestion(req);
-      questionResolverRef.current = resolve;
-    });
+  function requestAskUser(req: AskUserRequest): Promise<string | null> {
+    return questionQueue.request(req);
   }
   function resolveAskUser(answer: string): void {
-    questionResolverRef.current?.(answer);
-    questionResolverRef.current = null;
-    setPendingQuestion(null);
+    questionQueue.resolveCurrent(answer);
+  }
+  /** 强制清空所有待追问（供「停止」按钮解挂） */
+  function forceResolveAskUser(): void {
+    questionQueue.resolveAll(null);
   }
 
   // 写操作确认通道：工具运行到写/执行时调 requestConfirm，弹窗等用户按下确认/拒绝
@@ -172,6 +190,8 @@ export function useWorkPanel({
     requestConfirm,
     resolveAskUser,
     resolveConfirm,
+    forceResolveConfirm,
+    forceResolveAskUser,
     setPanelOpen,
     setProtectedWorkspaces,
     setWorkspacePath,

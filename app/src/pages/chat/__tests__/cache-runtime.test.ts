@@ -60,6 +60,7 @@ describe("runSemanticCacheRuntime", () => {
       setCacheNotice: vi.fn(),
       setPersistNotice: vi.fn(),
       onCacheHitDone,
+      isCurrentTurn: () => true,
     });
 
     expect(result.hit).toBe(true);
@@ -97,6 +98,7 @@ describe("runSemanticCacheRuntime", () => {
       setCacheNotice: vi.fn(),
       setPersistNotice: vi.fn(),
       onCacheHitDone: vi.fn(),
+      isCurrentTurn: () => true,
     });
 
     expect(result).toMatchObject({
@@ -106,5 +108,64 @@ describe("runSemanticCacheRuntime", () => {
       cacheEligible: true,
       cacheIntent: answerOnlyDecision,
     });
+  });
+
+  it("Stop 后晚到的缓存命中不持久化，也不覆盖新轮提示", async () => {
+    let resolveLookup!: (value: {
+      id: string;
+      responseText: string;
+      modelId: string;
+      similarity: number;
+      ageMs: number;
+    }) => void;
+    mocks.lookupCache.mockImplementation(() => new Promise((resolve) => {
+      resolveLookup = resolve;
+    }));
+    let current = true;
+    const persistAssistant = vi.fn();
+    const setCacheNotice = vi.fn();
+    const onCacheHitDone = vi.fn();
+    const setMessages = vi.fn();
+
+    const pending = runSemanticCacheRuntime({
+      text: "解释一下这个概念",
+      newMessages: [],
+      modelId: "model-1",
+      modelLabel: "Model One",
+      pureMode: false,
+      smartRoutingEnabled: true,
+      workspacePath: null,
+      workflowSnapshot: null,
+      intentJudgeCalledThisTurn: true,
+      turnIntentDecision: answerOnlyDecision,
+      intentJudgeModel: null,
+      persistAssistant,
+      cacheHitLabel: (days) => `${days} days`,
+      markStickToBottom: vi.fn(),
+      setMessages,
+      setIsStreaming: vi.fn(),
+      setStreamError: vi.fn(),
+      setSwitchNotice: vi.fn(),
+      setCacheNotice,
+      setPersistNotice: vi.fn(),
+      onCacheHitDone,
+      isCurrentTurn: () => current,
+    });
+
+    await vi.waitFor(() => expect(mocks.lookupCache).toHaveBeenCalledOnce());
+    current = false;
+    resolveLookup({
+      id: "cache-late",
+      responseText: "late cached answer",
+      modelId: "model-1",
+      similarity: 0.99,
+      ageMs: 0,
+    });
+
+    await expect(pending).resolves.toEqual({ hit: true });
+    expect(setMessages).toHaveBeenCalledTimes(1);
+    expect(persistAssistant).not.toHaveBeenCalled();
+    expect(setCacheNotice).not.toHaveBeenCalledWith(expect.stringContaining("days"));
+    expect(onCacheHitDone).not.toHaveBeenCalled();
   });
 });

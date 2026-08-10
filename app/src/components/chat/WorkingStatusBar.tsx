@@ -1,21 +1,34 @@
 import { CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ToolCallView } from "@/lib/work-artifact-views";
-import type { StreamActivityPhase } from "@/pages/chat/streaming-status";
+import { formatElapsed, type StreamActivityPhase } from "@/pages/chat/streaming-status";
 
 export function WorkingStatusBar({
   activeCall,
   running,
   phase = "streaming",
+  elapsedMs = 0,
 }: {
   activeCall?: ToolCallView;
   running: boolean;
   phase?: StreamActivityPhase;
+  /** 本轮已耗时（毫秒）——用于「模型响应较慢」提示（2026-08-05 诊断可见性） */
+  elapsedMs?: number;
 }) {
   const { t } = useTranslation();
   const activeSummary = activeCall
     ? t(`chat.toolSteps.${activeCall.summaryKey}`, { ...activeCall.summaryVars, defaultValue: activeCall.shortSummary })
     : "";
+
+  // 压缩历史中（长对话触发上下文压缩时短暂出现，2026-08-05 诊断可见性）
+  if (phase === "compressing") {
+    return (
+      <div className="flex min-w-0 items-center gap-2 text-[11px] text-sky-400">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span className="font-semibold">{t("chat.working.compressing")}</span>
+      </div>
+    );
+  }
 
   // 等待用户确认写操作
   if (activeCall?.status === "awaiting_approval") {
@@ -38,6 +51,15 @@ export function WorkingStatusBar({
           <CheckCircle2 className="h-3 w-3" />
           <span className="font-semibold">{t("chat.working.done")}</span>
           <span className="truncate text-muted-foreground">{activeSummary}</span>
+        </div>
+      );
+    }
+    // 响应明显偏慢（>15s 仍无首字/工具）→ 琥珀色提示，引导用户用停止键解挂
+    if (elapsedMs >= 15_000) {
+      return (
+        <div className="flex min-w-0 items-center gap-2 text-[11px] text-amber-400">
+          <Clock className="h-3 w-3" />
+          <span className="font-semibold">{t("chat.working.slowResponse", { time: formatElapsed(elapsedMs) })}</span>
         </div>
       );
     }

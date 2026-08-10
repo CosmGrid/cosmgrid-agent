@@ -31,6 +31,9 @@ interface PrepareTurnWorkflowOptions {
   >[0]["model"];
   workspacePath: string | null;
   applySnapshot: (snapshot: WorkflowSnapshot) => void;
+  /** 本轮的 AbortSignal（来自 handleSend 的 controller.signal）——透传给意图判断 LLM，
+   *  让它在「停止」或被取消时及时中断，且不无限挂起（B3）。 */
+  abortSignal?: AbortSignal;
 }
 
 export interface PreparedTurnWorkflow {
@@ -78,6 +81,7 @@ export async function prepareTurnWorkflow(
       recentTurnIds: [options.userId],
       model: options.intentJudgeModel,
       learnedExamples,
+      abortSignal: options.abortSignal,
     });
 
     captureIntentDiagnostics(options.text, decision, learnedExamples);

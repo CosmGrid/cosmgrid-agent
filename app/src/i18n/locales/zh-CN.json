@@ -103,6 +103,8 @@
       "working": "正在工作",
       "replying": "模型正在回复",
       "checking": "正在自检",
+      "compressing": "正在压缩历史以节省上下文",
+      "slowResponse": "模型响应较慢（已 {{time}}，可点停止）",
       "done": "执行完毕",
       "awaitingApproval": "等待你确认"
     },

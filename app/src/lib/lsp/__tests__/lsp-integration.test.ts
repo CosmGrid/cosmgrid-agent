@@ -89,7 +89,15 @@ describe("TypeScript LSP real-process integration", () => {
     });
     diagnosticPromise = new Promise((resolve) => {
       client.onNotification((method, params) => {
-        if (method === "textDocument/publishDiagnostics") resolve(params);
+        if (method !== "textDocument/publishDiagnostics") return;
+        // typescript-language-server 可能先发布一次空 diagnostics，再发布真正的类型错误。
+        // 不能把第一条通知当最终结果，否则用例会随进程时序随机红。
+        const diagnostics = (params as {
+          diagnostics?: Array<{ message?: string }>;
+        } | undefined)?.diagnostics;
+        if (diagnostics?.some((item) => item.message?.includes("not assignable"))) {
+          resolve(params);
+        }
       });
     });
 

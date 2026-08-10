@@ -62,6 +62,18 @@ export const askUserTool: ToolDefinition<AskUserParams> = {
       });
     }
     const answer = await ctx.askUser({ question: input.question, options: input.options });
+    if (answer === null) {
+      return errorResult({
+        output: "用户已取消当前任务，没有回答这个问题。不要把空答案当成用户选择。",
+        summary: "用户取消了追问",
+        error: {
+          code: TOOL_DENIED,
+          rootCauseHint: "当前任务已被用户停止，追问没有答案",
+          retryable: false,
+          stopCondition: "停止当前任务，不要继续等待或猜测答案",
+        },
+      });
+    }
     return successResult({
       output: `用户选择：${answer}`,
       summary: `用户选择「${answer}」`,

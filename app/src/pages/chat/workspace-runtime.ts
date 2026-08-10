@@ -15,7 +15,7 @@ export interface PrepareChatWorkspaceRuntimeArgs {
   assistantId: string;
   permissionMode: "read" | "confirm" | "auto";
   requestConfirm: (req: ToolConfirmRequest) => Promise<boolean>;
-  requestAskUser: (req: AskUserRequest) => Promise<string>;
+  requestAskUser: (req: AskUserRequest) => Promise<string | null>;
   getDesktopPath?: () => Promise<string | null>;
   stopIfAborted: () => boolean;
   /** 2026-07-10 OMO-7 capability guardrail：当前选中模型的人类可读名，透传给
@@ -37,6 +37,25 @@ export async function prepareChatWorkspaceRuntime(
 ): Promise<PreparedChatWorkspaceRuntime> {
   const desktopPath = await (args.getDesktopPath ?? (() => desktopDir().catch(() => null)))();
   const writableDesktopPath = args.includeWriteTools ? desktopPath : null;
+  const confirm = async (request: ToolConfirmRequest): Promise<boolean> => {
+    // 工具可能先做路径解析/差异计算，直到 Stop 之后才抵达确认边界。
+    // 必须在真正入队前再次核对本轮，auto 档也不能让旧轮继续写盘。
+    if (args.stopIfAborted()) return false;
+    return args.permissionMode === "auto" ? true : args.requestConfirm(request);
+  };
+  const approveMcpLaunch: NonNullable<
+    Parameters<typeof prepareWorkspaceToolRuntime>[0]["approveMcpLaunch"]
+  > = async (server, workspacePath) => {
+    if (args.stopIfAborted()) return false;
+    return args.requestConfirm({
+      toolName: `mcp-server:${server.name}`,
+      summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
+    });
+  };
+  const askUser = async (request: AskUserRequest): Promise<string | null> => {
+    if (args.stopIfAborted()) return null;
+    return args.requestAskUser(request);
+  };
 
   if (args.workspacePath) {
     if (args.primaryIsCli) {
@@ -56,12 +75,9 @@ export async function prepareChatWorkspaceRuntime(
       includeWrite: args.includeWriteTools,
       conversationId: args.conversationId ?? undefined,
       messageId: args.assistantId,
-      confirm: args.permissionMode === "auto" ? async () => true : args.requestConfirm,
-      approveMcpLaunch: (server, workspacePath) => args.requestConfirm({
-        toolName: `mcp-server:${server.name}`,
-        summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
-      }),
-      askUser: args.requestAskUser,
+      confirm,
+      approveMcpLaunch,
+      askUser,
       includePreamble: true,
       desktopPath: writableDesktopPath,
       modelName: args.modelName,
@@ -80,12 +96,9 @@ export async function prepareChatWorkspaceRuntime(
       includeWrite: false,
       conversationId: args.conversationId ?? undefined,
       messageId: args.assistantId,
-      confirm: args.permissionMode === "auto" ? async () => true : args.requestConfirm,
-      approveMcpLaunch: (server, workspacePath) => args.requestConfirm({
-        toolName: `mcp-server:${server.name}`,
-        summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
-      }),
-      askUser: args.requestAskUser,
+      confirm,
+      approveMcpLaunch,
+      askUser,
       modelName: args.modelName,
       activeCaps: args.activeCaps,
     });

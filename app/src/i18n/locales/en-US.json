@@ -103,6 +103,8 @@
       "working": "Working",
       "replying": "Model is replying",
       "checking": "Self-checking",
+      "compressing": "Compressing history to save context",
+      "slowResponse": "Model is slow to respond ({{time}} elapsed, you can stop)",
       "done": "Done",
       "awaitingApproval": "Waiting for your approval"
     },
