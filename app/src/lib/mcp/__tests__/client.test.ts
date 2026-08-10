@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   disposeRemote: vi.fn(),
   disposeRemoteServer: vi.fn(),
   hasRemote: vi.fn(() => false),
-  transports: [] as Array<{ options: Record<string, unknown>; dispose: ReturnType<typeof vi.fn>; simulateTerminated: () => void }>,
+  transports: [] as Array<{ options: Record<string, unknown>; dispose: ReturnType<typeof vi.fn>; simulateTerminated: () => void; simulateError: () => void }>,
 }));
 
 vi.mock("../remote-client", () => ({
@@ -25,6 +25,7 @@ vi.mock("@/lib/rpc/tauri-transport", () => ({
   TauriRpcTransport: class {
     private listener: ((message: unknown) => void) | null = null;
     private closeListeners: Array<() => void> = [];
+    private errorListeners: Array<(error: Error) => void> = [];
     dispose = vi.fn(async () => undefined);
 
     constructor(readonly options: Record<string, unknown>) {
@@ -38,12 +39,19 @@ vi.mock("@/lib/rpc/tauri-transport", () => ({
     onClose(listener: () => void) {
       this.closeListeners.push(listener);
     }
-    onError() {}
+    onError(listener: (error: Error) => void) {
+      this.errorListeners.push(listener);
+    }
     async start() {}
 
     /** 测试用：模拟进程终止，触发 onDead 让会话缓存 evict 自己。 */
     simulateTerminated() {
       for (const l of this.closeListeners) l();
+    }
+
+    /** 测试用：模拟子进程往 stdout 打了一行非 JSON 内容（onError，进程本身没死）。 */
+    simulateError() {
+      for (const l of this.errorListeners) l(new Error("malformed"));
     }
 
     async send(raw: unknown) {
@@ -147,6 +155,24 @@ describe("MCP client routing and lifecycle", () => {
 
     await listMcpTools(local, "/workspace-a");
     // evict 生效：第二次调用应该重新建了一个新 transport，不是复用第一次那个
+    expect(mocks.transports).toHaveLength(2);
+  });
+
+  // 2026-07-16 review 修复回归测试：onClose（进程真的死了）时 Rust 侧 rpc.rs 的
+  // child.wait() 已经把 session_id 从表里删了，只 evict JS 缓存就够。但 onError（子进程
+  // 往 stdout 打了一行非 JSON 内容，进程本身没死）之前只 evict 不 dispose——Rust 侧那个
+  // 还活着的进程会永久占着这个确定性 session_id，下次同 workspace 重连撞
+  // "RPC session already exists" 硬拒绝，必须重启 app 才能恢复。现在 onError 也应该先
+  // dispose()（真正 kill 掉 Rust 侧进程释放 session_id）再 evict。
+  it("transport 报 error（进程没死，stdout 吐了脏数据）也要 dispose 掉进程，不能只 evict 缓存", async () => {
+    const local = server("local_stdio");
+    await listMcpTools(local, "/workspace-error-evict");
+    expect(mocks.transports).toHaveLength(1);
+
+    mocks.transports[0]!.simulateError();
+    expect(mocks.transports[0]!.dispose).toHaveBeenCalled();
+
+    await listMcpTools(local, "/workspace-error-evict");
     expect(mocks.transports).toHaveLength(2);
   });
 });

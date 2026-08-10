@@ -6,6 +6,8 @@ const state = vi.hoisted(() => ({
     sent: Array<Record<string, unknown>>;
     emit: (message: unknown) => void;
     simulateTerminated: () => void;
+    simulateError: () => void;
+    disposeCount: number;
   }>,
 }));
 
@@ -27,6 +29,7 @@ vi.mock("../server-detection", () => ({
 vi.mock("@/lib/rpc/tauri-transport", () => ({
   TauriRpcTransport: class {
     sent: Array<Record<string, unknown>> = [];
+    disposeCount = 0;
     private listener: ((message: unknown) => void) | null = null;
     private closeListeners: Array<() => void> = [];
     private errorListeners: Array<(error: Error) => void> = [];
@@ -48,7 +51,9 @@ vi.mock("@/lib/rpc/tauri-transport", () => ({
     }
 
     async start() {}
-    async dispose() {}
+    async dispose() {
+      this.disposeCount++;
+    }
 
     emit(message: unknown) {
       this.listener?.(message);
@@ -57,6 +62,11 @@ vi.mock("@/lib/rpc/tauri-transport", () => ({
     /** 测试用：模拟进程终止/报错，触发 onDead 让会话缓存 evict 自己。 */
     simulateTerminated() {
       for (const l of this.closeListeners) l();
+    }
+
+    /** 测试用：模拟子进程往 stdout 打了一行非 JSON 内容（onError，进程本身没死）。 */
+    simulateError() {
+      for (const l of this.errorListeners) l(new Error("malformed"));
     }
 
     async send(raw: unknown) {
@@ -146,6 +156,26 @@ describe("lsp-session", () => {
     const transportsAfterSecondCall = state.transports.length;
 
     // evict 生效：第二次调用应该重新建了一个新 transport，不是复用第一次那个
+    expect(transportsAfterSecondCall).toBe(transportsAfterFirstCall + 1);
+  });
+
+  // 2026-07-16 review 修复回归测试：onClose（进程真的死了）时 Rust 侧 rpc.rs 的
+  // child.wait() 已经把 session_id 从表里删了，只 evict JS 缓存就够。但 onError（子进程
+  // 往 stdout 打了一行非 JSON 内容，进程本身没死）之前只 evict 不 dispose——Rust 侧那个
+  // 还活着的进程会永久占着这个确定性 session_id，下次同 workspace 重连撞
+  // "RPC session already exists" 硬拒绝，必须重启 app 才能恢复。现在 onError 也应该先
+  // dispose()（真正 kill 掉 Rust 侧进程释放 session_id）再 evict。
+  it("transport 报 error（进程没死，stdout 吐了脏数据）也要 dispose 掉进程，不能只 evict 缓存", async () => {
+    await getLspDiagnostics("/workspace-error-evict", "/workspace-error-evict/src/file.ts");
+    const transportsAfterFirstCall = state.transports.length;
+    const firstTransport = state.transports[transportsAfterFirstCall - 1]!;
+
+    firstTransport.simulateError();
+
+    expect(firstTransport.disposeCount).toBe(1);
+
+    await getLspDiagnostics("/workspace-error-evict", "/workspace-error-evict/src/file.ts");
+    const transportsAfterSecondCall = state.transports.length;
     expect(transportsAfterSecondCall).toBe(transportsAfterFirstCall + 1);
   });
 

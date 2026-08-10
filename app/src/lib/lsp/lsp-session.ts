@@ -69,8 +69,22 @@ async function createSession(
   // client/transport，之后同 workspace 的调用要么快速失败于"session not found"要么再次
   // 悬挂，用户必须重启 app 才能恢复该 workspace 的 LSP 功能。这里挂上 onClose/onError，
   // 进程一终止/一报错就把这个 key 从缓存里 evict，下次调用会重新 spawn 一个干净的会话。
-  transport.onClose(onDead);
-  transport.onError(onDead);
+  //
+  // 2026-07-16 review 修复：onClose（进程真的退出）触发时 Rust 侧 rpc.rs 的 child.wait()
+  // 已经把这个 session_id 从 RpcChildren 表里删了，这条路径本来就没问题。但 onError
+  // （比如子进程往 stdout 打了一行不是 JSON 的日志，见 tauri-transport.ts 的
+  // "malformed JSON" 分支）触发时进程根本没死，Rust 侧那个 session_id 依然占着——只 evict
+  // JS 侧缓存不 kill 掉这个还活着的进程的话，下次同 workspace 重连会用同一个确定性
+  // session_id 调 spawn_rpc_process，命中 rpc.rs 的 "RPC session already exists" 硬拒绝，
+  // 这个 workspace 的 LSP 从此死锁，只能重启 app。所以两种触发都要先 dispose()（内部会调
+  // kill_rpc_process 真正杀掉 Rust 侧进程，进程已经死了的场景下这只是个无害的空操作，
+  // dispose() 内部本来就 catch 掉了错误）再 evict 缓存，不能只 evict 不 dispose。
+  const disposeAndEvict = () => {
+    void transport.dispose();
+    onDead();
+  };
+  transport.onClose(disposeAndEvict);
+  transport.onError(disposeAndEvict);
   const diagnostics: DiagnosticsMap = new Map();
 
   client.onRequest("workspace/configuration", (params) => {

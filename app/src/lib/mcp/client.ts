@@ -68,8 +68,19 @@ async function getLocalSession(server: McpServerRow, workspacePath?: string): Pr
         framing: "newline",
       });
       const client = new JsonRpcClient(transport, { timeoutMs: 30_000 });
-      transport.onClose(onDead);
-      transport.onError(onDead);
+      // 2026-07-16 review 修复：onError（子进程 stdout 打出一行非 JSON 内容，很多第三方
+      // stdio MCP server 常见的调试日志误打到 stdout）触发时进程本身没死，只 evict JS 缓存
+      // 不 kill 掉这个还活着的进程的话，Rust 侧 session_id 永久占位——下次同 workspace
+      // 重连用同一个确定性 session_id 调 spawn_rpc_process 会撞 "already exists" 硬拒绝，
+      // 这个 server 只能重启 app 才能恢复。onClose（进程真的终止）时 Rust 侧已经在
+      // child.wait() 里把 session_id 从表里删了，这里再 dispose() 一次是无害空操作
+      // （dispose 内部 catch 掉了错误），两种触发统一走 dispose+evict，不再只 evict。
+      const disposeAndEvict = () => {
+        void transport.dispose();
+        onDead();
+      };
+      transport.onClose(disposeAndEvict);
+      transport.onError(disposeAndEvict);
       await transport.start();
       await client.call("initialize", {
         protocolVersion: MCP_PROTOCOL_VERSION,
