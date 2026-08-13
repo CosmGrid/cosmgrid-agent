@@ -74,13 +74,7 @@
     "contextTrimmed": "[{{count}} earlier messages omitted to save tokens]",
     "writeGuardNotice": {
       "noWorkspace": "⚠️ This looks like a file-editing request, but no folder is bound to this chat — the AI has no read/write tools, so the reply below may just be discussion, not an actual edit. Click \"Choose Folder\" next to the input box to bind a working folder, then send this again.",
-      "readOnly": "⚠️ This looks like a file-editing request, but the current permission is \"Read-only\" — the AI can look but can't change anything. If you really want it to edit files, switch the permission to \"Confirm before editing\" or \"Auto-edit\" and send this again."
-    },
-    "permissionEscalation": {
-      "title": "Switch to writable permission?",
-      "description": "Looks like you want the AI to create or edit files, but the current permission is \"Read-only\". Confirming switches to \"Confirm before editing\" — the AI can then actually write files, but will still check with you before each specific action.",
-      "confirmText": "Switch now",
-      "cancelText": "Not now"
+      "readOnly": "⚠️ This looks like a file-editing request, but the current permission is \"Read-only\" — the AI can look but can't change anything. To let it edit files, click the permission switch next to the input box and pick \"Confirm writes\" (or \"Auto\"), then send this again."
     },
     "harnessRetry": "Possible fabrication · asking the model to self-check and redo",
     "intentNudgeRetry": "Said you'd act but didn't call any tool · asking again…",
@@ -109,6 +103,8 @@
       "working": "Working",
       "replying": "Model is replying",
       "checking": "Self-checking",
+      "compressing": "Compressing history to save context",
+      "slowResponse": "Model is slow to respond ({{time}} elapsed, you can stop)",
       "done": "Done",
       "awaitingApproval": "Waiting for your approval"
     },

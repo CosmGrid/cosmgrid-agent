@@ -1,9 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { ModelMessage } from "ai";
-import { toolExecutions, workflowRuns } from "@/lib/db";
+import { toolExecutions, workflowRuns, type ToolExecutionRow } from "@/lib/db";
 import { writeCache } from "@/lib/llm/semantic-cache";
 import type { StreamUsage } from "@/lib/llm/chat-fallback";
-import { completeCurrentWorkflowNode, failCurrentWorkflowNode, markCurrentWorkflowNodeNeedsUser, repairCurrentWorkflowNode } from "@/lib/workflow/reducer";
+import { attachObservedActivity, completeCurrentWorkflowNode, failCurrentWorkflowNode, markCurrentWorkflowNodeNeedsUser, repairCurrentWorkflowNode } from "@/lib/workflow/reducer";
+import { deriveObservedActivity } from "@/lib/workflow/observed-activity";
 import { verifyNodeOutcome, applyVerifyRepairLoop } from "@/lib/workflow/node-verifier";
 import { verifyTask } from "@/lib/llm/evidence/task-verifier";
 import { VERIFY_ACCEPTANCE_CRITERIA } from "@/lib/llm/evidence/verify-acceptance-criteria";
@@ -99,10 +100,12 @@ async function runWorkflowVerificationInBackground(
       );
       // Harness 工程实施计划阶段1：本轮是否有工具被用户拒绝（denied），据此判定 needs_user，
       // 不能把"用户不同意写"当成"验收失败"处理。查失败不阻塞正常完成路径。
-      const userDeniedPermission = await toolExecutions
+      // 工作流"实际动作可视化"阶段1（2026-07-18）：这次查询本来就要把本轮工具执行行读出来
+      // 判 denied——顺手把整份 rows 留着喂给 deriveObservedActivity，不新开一次 DB 读。
+      const messageToolRows = await toolExecutions
         .listByMessage(args.assistantId)
-        .then((rows) => rows.some((row) => row.status === "denied"))
-        .catch(() => false);
+        .catch((): ToolExecutionRow[] => []);
+      const userDeniedPermission = messageToolRows.some((row) => row.status === "denied");
       // Harness 工程实施计划阶段1：不再是"非空回复就完成"——先跑独立验收器，
       // 只有 passed 才真的把节点标 done；harnessDirty/无工具证据时 failed，
       // verify 阶段 failed 且未达修复上限时降级成 retryable 打回 execute 重来，
@@ -185,12 +188,19 @@ async function runWorkflowVerificationInBackground(
       }
 
       if (!outcome || outcome.status === "passed") {
-        const nextWorkflow = completeCurrentWorkflowNode({
-          snapshot: args.workflowSnapshot,
-          summary: finalContent.slice(0, 1200),
-          evidenceIds,
-          verification,
-        });
+        // 工作流"实际动作可视化"阶段1（2026-07-18）：节点验收 passed 后，在权威 reducer
+        // （completeCurrentWorkflowNode）算完 currentNode/status/nextActions 之后，
+        // 再用 attachObservedActivity 包一层，把本轮"读/写/命令"的观测结果并进同一个要
+        // 保存的 snapshot——不新开一次 saveSnapshot、不改动权威状态机字段。
+        const nextWorkflow = attachObservedActivity(
+          completeCurrentWorkflowNode({
+            snapshot: args.workflowSnapshot,
+            summary: finalContent.slice(0, 1200),
+            evidenceIds,
+            verification,
+          }),
+          deriveObservedActivity(messageToolRows),
+        );
         await workflowRuns.saveSnapshot({
           runId: args.workflowRunId,
           snapshot: nextWorkflow,

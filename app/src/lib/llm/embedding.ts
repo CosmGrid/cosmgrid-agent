@@ -104,7 +104,7 @@ export const keywordEmbeddingProvider: EmbeddingProvider = {
   embed: async (text: string) => keywordEmbed(text, DEFAULT_DIM),
 };
 
-let activeProvider: EmbeddingProvider = keywordEmbeddingProvider;
+const activeProvider: EmbeddingProvider = keywordEmbeddingProvider;
 
 /** 取当前激活的 embedding provider */
 export function getEmbeddingProvider(): EmbeddingProvider {

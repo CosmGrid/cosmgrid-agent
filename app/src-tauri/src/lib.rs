@@ -20,7 +20,9 @@ use commands::fetch::{
 use commands::keychain::{delete_api_key, get_api_key, save_api_key};
 use commands::menu::set_menu_language;
 use commands::rpc::{kill_rpc_process, spawn_rpc_process, write_rpc_stdin, RpcChildren};
-use commands::shell::{git_commit_file, git_read, init_shadow_git_repo, run_shell_args, run_shell_command};
+use commands::shell::{
+    git_commit_file, git_read, init_shadow_git_repo, run_shell_args, run_shell_command,
+};
 use security::{grant_workspace_fs_access, resolve_realpath};
 
 use std::time::Duration;
@@ -36,6 +38,10 @@ use tauri::WindowEvent;
 // JS 侧会在这之前就正常关闭，看门狗根本不会触发；只有在 JS/IPC 真的失控时才兜底。
 const WINDOW_CLOSE_WATCHDOG_SECS: u64 = 5;
 
+fn is_main_window(label: &str) -> bool {
+    label == "main"
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -49,6 +55,12 @@ pub fn run() {
             }
         }))
         .on_window_event(|window, event| {
+            // 这里只能守护主窗口。web_fetch 会创建 render-* 隐藏窗口并在抓取结束后
+            // 主动 close；Tauri 的 close() 同样会发 CloseRequested。若不按 label 过滤，
+            // 隐藏窗口关闭 5 秒后也会 app_handle.exit(0)，表现就是“发消息后应用退出”。
+            if !is_main_window(window.label()) {
+                return;
+            }
             if let WindowEvent::CloseRequested { .. } = event {
                 let app_handle = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -104,4 +116,16 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_main_window;
+
+    #[test]
+    fn only_the_main_window_owns_the_app_exit_watchdog() {
+        assert!(is_main_window("main"));
+        assert!(!is_main_window("render-request-1"));
+        assert!(!is_main_window("settings"));
+    }
 }

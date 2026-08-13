@@ -4,6 +4,7 @@ import {
   applyNextActionChoice,
   applyTurnIntentDecision,
   attachActiveSkillToWorkflow,
+  attachObservedActivity,
   completeCurrentWorkflowNode,
   failCurrentWorkflowNode,
   markCurrentWorkflowNodeNeedsUser,
@@ -379,5 +380,48 @@ describe("workflow reducer", () => {
     const next = applyNextActionChoice({ snapshot: planned, actionId: "stale_action_id" });
 
     expect(next).toBe(planned);
+  });
+
+  // 工作流"实际动作可视化"阶段1（2026-07-18）：attachObservedActivity 是纯粹的"观测字段"
+  // 写入——只允许合并 context.lastObservedActivity，不许碰权威状态机字段。
+  describe("attachObservedActivity", () => {
+    it("把 phases/dominant 合并进 context.lastObservedActivity，返回新对象（不 mutate 原快照）", () => {
+      const original = snapshot();
+      const next = attachObservedActivity(original, { phases: ["read_project", "execute"], dominant: "execute" });
+
+      expect(next).not.toBe(original);
+      expect(next.context.lastObservedActivity).toMatchObject({
+        phases: ["read_project", "execute"],
+        dominant: "execute",
+      });
+      expect(typeof next.context.lastObservedActivity?.observedAt).toBe("string");
+      expect(Number.isNaN(Date.parse(next.context.lastObservedActivity!.observedAt))).toBe(false);
+      // 原快照本身不受影响
+      expect(original.context.lastObservedActivity).toBeUndefined();
+    });
+
+    it("绝不触碰 currentNodeId / nodes / status / nextActions / pendingDecision 等权威状态机字段", () => {
+      const original = snapshot();
+      const next = attachObservedActivity(original, { phases: [], dominant: null });
+
+      expect(next.currentNodeId).toBe(original.currentNodeId);
+      expect(next.nodes).toBe(original.nodes);
+      expect(next.status).toBe(original.status);
+      expect(next.nextActions).toBe(original.nextActions);
+      expect(next.pendingDecision).toBe(original.pendingDecision);
+    });
+
+    it("dominant=null（0 有效工具/纯对话）时同样正确写入", () => {
+      const next = attachObservedActivity(snapshot(), { phases: [], dominant: null });
+      expect(next.context.lastObservedActivity).toMatchObject({ phases: [], dominant: null });
+    });
+
+    it("保留 context 里已有的其它字段（如 planSummary），不覆盖", () => {
+      const withPlan = { ...snapshot(), context: { ...snapshot().context, planSummary: "既有计划摘要" } };
+      const next = attachObservedActivity(withPlan, { phases: ["execute"], dominant: "execute" });
+
+      expect(next.context.planSummary).toBe("既有计划摘要");
+      expect(next.context.lastObservedActivity).toMatchObject({ phases: ["execute"], dominant: "execute" });
+    });
   });
 });

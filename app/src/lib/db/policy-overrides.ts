@@ -11,8 +11,7 @@
 
 import { getDb } from "./connection";
 import { now } from "./utils";
-import type { ScopeLevelLiteral } from "@/lib/policy/scope-key";
-import { GLOBAL_SCOPE_ID, keyToScope, scopeToKey } from "@/lib/policy/scope-key";
+import { GLOBAL_SCOPE_ID, keyToScope, scopeToKey, type ScopeLevelLiteral } from "@/lib/policy/scope-key";
 import type { PolicyScope } from "@/lib/policy/types";
 
 export interface PolicyOverrideRow {

@@ -59,25 +59,27 @@ describe("工程化诊断开关", () => {
 describe("权限档持久化", () => {
   beforeEach(() => store.clear());
 
-  it("默认 read（最安全，未设置过时）", () => {
-    expect(getPermissionMode()).toBe("read");
-  });
-
-  it("切到 confirm 后再读回就是 confirm", () => {
-    setPermissionMode("confirm");
+  // 2026-07-18 写权限双层重构：默认档从 read 改为 confirm——read 是纯只读审阅模式，
+  // 新用户默认应该能干活；confirm 能写但每次写盘前弹确认，安全性不丢。
+  it("默认 confirm（未设置过时，能写但每次写盘前弹确认）", () => {
     expect(getPermissionMode()).toBe("confirm");
   });
 
-  it("切到 auto 后能切回 read", () => {
-    setPermissionMode("auto");
-    expect(getPermissionMode()).toBe("auto");
+  it("切到 read 后再读回就是 read", () => {
     setPermissionMode("read");
     expect(getPermissionMode()).toBe("read");
   });
 
-  it("localStorage 脏写（非三档之一）降级回 read，绝不让 UI 拿到非法值", () => {
+  it("切到 auto 后能切回 confirm", () => {
+    setPermissionMode("auto");
+    expect(getPermissionMode()).toBe("auto");
+    setPermissionMode("confirm");
+    expect(getPermissionMode()).toBe("confirm");
+  });
+
+  it("localStorage 脏写（非三档之一）降级回 confirm，绝不让 UI 拿到非法值", () => {
     store.set("cosmgrid.permissionMode", "garbage_value");
-    expect(getPermissionMode()).toBe("read");
+    expect(getPermissionMode()).toBe("confirm");
   });
 });
 

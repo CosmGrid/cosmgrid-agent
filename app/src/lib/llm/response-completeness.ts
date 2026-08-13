@@ -22,9 +22,8 @@ export function extractVisibleAnswerText(rawText: string): string {
     .trim();
 }
 
-/** 一次调用是否产出了有效结果：有可见正文，或者产出过工具调用（纯工具调用型的回答
- *  本来就可能没有正文，不能因为没有 text 就误判成截断）。 */
-export function hasEffectiveOutput(rawText: string, toolCallCount: number): boolean {
-  if (toolCallCount > 0) return true;
+/** 一次调用是否产出了有效结果：必须有可见正文。
+ * 工具调用本身不是交付：模型可能在工具失败后只留下思考过程就提前结束。 */
+export function hasEffectiveOutput(rawText: string, _toolCallCount: number): boolean {
   return extractVisibleAnswerText(rawText).length > 0;
 }

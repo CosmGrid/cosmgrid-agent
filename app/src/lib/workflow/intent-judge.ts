@@ -2,6 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import type { LanguageModel } from "@/lib/llm/provider-factory";
 import { resolveMaxOutputTokens } from "@/lib/llm/model-limits";
+import { createAbortScope } from "@/lib/llm/abort-scope";
 import { classifyTurnIntent } from "./intent-classifier";
 import {
   BUILTIN_INTENT_EXAMPLES,
@@ -158,13 +159,17 @@ export async function judgeTurnIntent(args: {
   activeRun: WorkflowSnapshot | null;
   recentTurnIds?: string[];
   semanticRoute?: SemanticIntentRoute;
+  abortSignal?: AbortSignal;
 }): Promise<JudgeObject> {
   const semanticContext = buildIntentJudgeContext(args.semanticRoute ?? routeTurnIntentSemantically(args.text));
-  const { object } = await generateObject({
-    model: args.model,
-    schema: judgeSchema,
-    maxOutputTokens: Math.min(resolveMaxOutputTokens(args.model.modelId), 1200),
-    prompt: `你是 CosmGrid 的工作流意图裁判。你只判断用户这句话是否要推进工作流，不回答用户问题。
+  const abortScope = createAbortScope(args.abortSignal, 30_000);
+  try {
+    const { object } = await generateObject({
+      model: args.model,
+      schema: judgeSchema,
+      maxOutputTokens: Math.min(resolveMaxOutputTokens(args.model.modelId), 1200),
+      abortSignal: abortScope.signal,
+      prompt: `你是 CosmGrid 的工作流意图裁判。你只判断用户这句话是否要推进工作流，不回答用户问题。
 
 可选 action：
 - answer_only：继续普通对话，不启动/推进工作流。
@@ -193,8 +198,15 @@ ${activeRunSummary(args.activeRun)}
 
 用户这句话：
 ${args.text}`,
-  });
-  return object;
+    });
+    return object;
+  } catch {
+    // 超时/中断/模型错误：不要卡死整轮，降级为普通对话（外层的 classifyTurnIntentWithJudge
+    // 也有 try/catch 兜底，这里再兜一层，确保 judgeTurnIntent 永不抛出、永挂起）
+    return { action: "answer_only", confidence: 0, reason: "intent judge 超时/失败，降级为普通对话" };
+  } finally {
+    abortScope.dispose();
+  }
 }
 
 export async function classifyTurnIntentWithJudge(args: {
@@ -203,6 +215,7 @@ export async function classifyTurnIntentWithJudge(args: {
   recentTurnIds?: string[];
   model?: LanguageModel | null;
   learnedExamples?: IntentExample[];
+  abortSignal?: AbortSignal;
 }): Promise<TurnIntentDecision> {
   const fallback = classifyTurnIntent(args);
   // 5.1 修复：统一算一次复杂度，所有 return path 都带上
@@ -231,6 +244,7 @@ export async function classifyTurnIntentWithJudge(args: {
       activeRun: args.activeRun,
       recentTurnIds: args.recentTurnIds,
       semanticRoute,
+      abortSignal: args.abortSignal,
     });
     if (judged.confidence < 0.65) return { ...(semanticDecision ?? fallback), complexity, semanticRoute };
     return {

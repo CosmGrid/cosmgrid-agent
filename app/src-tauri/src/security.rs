@@ -145,6 +145,23 @@ pub(crate) fn extra_path_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// 将 GUI 进程常缺失的 Homebrew / nvm 等目录放到子进程 PATH 的前面，同时保留原 PATH。
+/// Dock/Finder 启动的桌面程序不会读取交互式 shell 配置；不补这一步，bash 工具就可能
+/// 找不到 pnpm、node 或 typescript-language-server。
+pub(crate) fn prepend_path_dirs<I>(
+    existing_path: Option<std::ffi::OsString>,
+    extra_dirs: I,
+) -> Option<std::ffi::OsString>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut dirs: Vec<PathBuf> = extra_dirs.into_iter().collect();
+    if let Some(existing) = existing_path {
+        dirs.extend(env::split_paths(&existing));
+    }
+    env::join_paths(dirs).ok()
+}
+
 pub(crate) fn find_in_common_locations(program: &str) -> Option<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from);
     let mut candidates = vec![
@@ -228,7 +245,8 @@ pub(crate) fn fnv1a_hex(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rpc_base_env;
+    use super::{prepend_path_dirs, rpc_base_env};
+    use std::path::PathBuf;
 
     #[test]
     fn rpc_environment_does_not_inherit_unrelated_secrets() {
@@ -242,5 +260,27 @@ mod tests {
         assert_eq!(env.get("HOME").map(String::as_str), Some("/home/test"));
         assert!(!env.contains_key("OPENAI_API_KEY"));
         assert!(!env.contains_key("AWS_SECRET_ACCESS_KEY"));
+    }
+
+    #[test]
+    fn prepended_path_keeps_the_existing_path() {
+        let existing = std::env::join_paths([PathBuf::from("/usr/bin")]).unwrap();
+        let joined = prepend_path_dirs(
+            Some(existing),
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+            ],
+        )
+        .expect("PATH should be joinable");
+
+        assert_eq!(
+            std::env::split_paths(&joined).collect::<Vec<_>>(),
+            vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/bin"),
+            ],
+        );
     }
 }

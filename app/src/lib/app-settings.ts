@@ -4,7 +4,8 @@
 // - 智能路由 v2 是叠加在 v1 之上的可选增强：关掉后行为退回纯 v1 规则路由 + 不查语义缓存
 //   （产品真北：用户始终可一键覆盖）
 // - 权限档（read/confirm/auto）持久化：用户选过哪档就记哪档，关应用重启不丢
-//   （教训：默认 read 容易让新用户首轮以为"工具坏了"，记忆化能直接消除这个踩坑）
+//   （2026-07-18 写权限双层重构：默认档从 read 改为 confirm——read 是纯只读审阅模式，
+//   新用户默认应该能干活；confirm 能写但每次写盘前弹确认，记忆化让用户切过的档位跨会话保留）
 import { useEffect, useState } from "react";
 
 const SMART_ROUTING_KEY = "cosmgrid.smartRouting";
@@ -147,14 +148,19 @@ export type PermissionMode = "read" | "confirm" | "auto";
 const PERMISSION_MODE_KEY = "cosmgrid.permissionMode";
 const VALID_PERMISSION_MODES: readonly PermissionMode[] = ["read", "confirm", "auto"];
 
-/** 读权限档。默认 read；localStorage 脏写（不是三档之一）也降级回 read，绝不让 UI 拿到非法值 */
+/**
+ * 读权限档。默认 confirm（2026-07-18 写权限双层重构：只读档是纯审阅模式，新用户首轮
+ * 大概率是想让 AI 干活，默认卡死成只读只会让人以为"工具坏了"；confirm 档能写，但每次
+ * 写盘前仍会弹确认，安全性不丢——是"能干活"和"不失控"之间更合理的默认值）。
+ * localStorage 脏写（不是三档之一）也降级回 confirm，绝不让 UI 拿到非法值。
+ */
 export function getPermissionMode(): PermissionMode {
-  if (!hasLocalStorage()) return "read";
+  if (!hasLocalStorage()) return "confirm";
   const raw = localStorage.getItem(PERMISSION_MODE_KEY);
   if (raw && (VALID_PERMISSION_MODES as readonly string[]).includes(raw)) {
     return raw as PermissionMode;
   }
-  return "read";
+  return "confirm";
 }
 
 export function setPermissionMode(mode: PermissionMode): void {

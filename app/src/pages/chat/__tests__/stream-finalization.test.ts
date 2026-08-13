@@ -30,11 +30,20 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/workflow/reducer", () => ({
-  completeCurrentWorkflowNode: mocks.completeCurrentWorkflowNode,
-  failCurrentWorkflowNode: mocks.failCurrentWorkflowNode,
-  repairCurrentWorkflowNode: mocks.repairCurrentWorkflowNode,
-}));
+// 工作流"实际动作可视化"阶段1（2026-07-18）：三个权威 reducer 沿用原来的窄 mock 不变
+// （包括 markCurrentWorkflowNodeNeedsUser 等其它导出继续保持"未提供即 undefined"的原有
+// 行为，不动其它用例已经依赖的既有语义——尤其 needs_user 分支那条用例）。只额外挂上真实的
+// attachObservedActivity：它是这次要接线验证的对象本身，mock 掉就测不出"observed activity
+// 真的被合并进保存的 snapshot"了。
+vi.mock("@/lib/workflow/reducer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/workflow/reducer")>();
+  return {
+    attachObservedActivity: actual.attachObservedActivity,
+    completeCurrentWorkflowNode: mocks.completeCurrentWorkflowNode,
+    failCurrentWorkflowNode: mocks.failCurrentWorkflowNode,
+    repairCurrentWorkflowNode: mocks.repairCurrentWorkflowNode,
+  };
+});
 
 // 2026-07-14：verifyTask 单独 mock 掉——只关心 stream-finalization.ts 按 phase 传对了
 // acceptanceCriteria（该不该传 VERIFY_ACCEPTANCE_CRITERIA），verifyTask 自身的判定逻辑
@@ -239,12 +248,88 @@ describe("finalizeStreamedChatTurn", () => {
       }),
     );
     expect(mocks.failCurrentWorkflowNode).not.toHaveBeenCalled();
+    // 工作流"实际动作可视化"阶段1（2026-07-18）：completeCurrentWorkflowNode 的 mock 返回值
+    // （nextWorkflow）现在会被真实的 attachObservedActivity 包一层再保存——保存的快照不再
+    // 跟 nextWorkflow 严格相等（多了 context.lastObservedActivity），用 objectContaining
+    // 断言"原有字段都还在 + 新观测字段确实被写入"，而不是整体相等。
     expect(mocks.saveSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-1",
-      snapshot: nextWorkflow,
+      snapshot: expect.objectContaining({
+        runId: "run-1",
+        currentNodeId: null,
+        context: expect.objectContaining({
+          lastObservedActivity: expect.objectContaining({ phases: [], dominant: null }),
+        }),
+      }),
       eventType: "workflow.node_completed",
     }));
-    expect(applyWorkflowSnapshot).toHaveBeenCalledWith(nextWorkflow);
+    expect(applyWorkflowSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        currentNodeId: null,
+        context: expect.objectContaining({
+          lastObservedActivity: expect.objectContaining({ phases: [], dominant: null }),
+        }),
+      }),
+    );
+  });
+
+  // 工作流"实际动作可视化"阶段1（2026-07-18）接线测试：验证 ①保存的快照带上了
+  // lastObservedActivity（按本轮真实工具算出 read+write → dominant=execute）
+  // ②completeCurrentWorkflowNode 返回值里的 currentNodeId/nodes（节点状态）原样透传，
+  // 没有被 observed-activity 接线改动分毫。
+  it("Step4 接线：保存的快照带上 lastObservedActivity，且 currentNode/node.status 不被改动", async () => {
+    mocks.listByMessage.mockResolvedValue([
+      { id: "te-1", toolName: "write", status: "success" },
+      { id: "te-2", toolName: "read", status: "success" },
+    ]);
+    const completedNode = { id: "node-1", phase: "execute", status: "done" };
+    const nextWorkflowFromComplete = {
+      runId: "run-1",
+      currentNodeId: null,
+      nodes: [completedNode],
+      context: { projectFacts: [], changedFiles: [], riskLevel: "low" },
+    };
+    mocks.completeCurrentWorkflowNode.mockReturnValue(nextWorkflowFromComplete);
+    const applyWorkflowSnapshot = vi.fn();
+    const workflowSnapshot = makeSnapshot("execute");
+
+    await finalizeStreamedChatTurn({
+      text: "hello",
+      assistantMessage: { id: "assistant-1", role: "assistant", content: "" },
+      assistantId: "assistant-1",
+      streamingResult: {
+        fullContent: "已经改完并读过相关文件",
+        lastModelId: "model-1",
+        lastToolCallCount: 2,
+        harnessDirty: false,
+      },
+      conversationId: "conv-1",
+      projectId: null,
+      cacheEligible: false,
+      taskRole: "standard",
+      shouldCompleteWorkflowNode: true,
+      workflowSnapshot,
+      workflowRunId: "run-1",
+      controllerAborted: false,
+      persistAssistant: vi.fn(),
+      setMessages: vi.fn((updater) => updater([])),
+      applyWorkflowSnapshot,
+    });
+
+    await vi.waitFor(() => expect(applyWorkflowSnapshot).toHaveBeenCalled());
+
+    const savedSnapshot = mocks.saveSnapshot.mock.calls[0]![0].snapshot;
+    expect(savedSnapshot.context.lastObservedActivity).toMatchObject({
+      phases: ["read_project", "execute"],
+      dominant: "execute",
+    });
+    expect(typeof savedSnapshot.context.lastObservedActivity.observedAt).toBe("string");
+    // currentNode / node.status 完全来自 completeCurrentWorkflowNode 的返回值，原样透传，
+    // 没有被 attachObservedActivity 篡改。
+    expect(savedSnapshot.currentNodeId).toBe(nextWorkflowFromComplete.currentNodeId);
+    expect(savedSnapshot.nodes).toEqual(nextWorkflowFromComplete.nodes);
+    expect(applyWorkflowSnapshot).toHaveBeenCalledWith(savedSnapshot);
   });
 
   it("Harness 工程实施计划阶段1：execute 阶段 0 工具调用 → 验收不通过，不完成节点而是标 failed", async () => {

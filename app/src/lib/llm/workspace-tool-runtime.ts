@@ -19,8 +19,8 @@ export interface WorkspaceToolRuntimeOptions {
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   /** 本地 MCP 进程启动前的独立人工授权；不能被 auto 权限档替换为自动同意。 */
   approveMcpLaunch?: (server: McpServerRow, workspacePath?: string) => Promise<boolean>;
-  /** ask_user_question 工具用：结构化追问用户，返回用户选中的 label */
-  askUser?: (request: AskUserRequest) => Promise<string>;
+  /** ask_user_question 工具用：结构化追问；null 表示停止时未作答。 */
+  askUser?: (request: AskUserRequest) => Promise<string | null>;
   blockedCommands?: string[];
   includePreamble?: boolean;
   /** 桌面绝对路径——让模型知道"保存/导出到桌面"该写哪（见 workspace-context.ts 的 desktopPath）。 */

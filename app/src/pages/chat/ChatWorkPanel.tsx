@@ -1,4 +1,6 @@
-import { lazy, Suspense, type MouseEvent } from "react";
+import { type MouseEvent } from "react";
+// 2026-07-18 用户要求隐藏「IDE 视图」板块，lazy / Suspense 暂时用不上（原用于 WorkPanelIde 的
+// 懒加载与占位）；以后恢复该板块时，把它们加回上面这行的 react import 即可。
 import { Activity, Cpu, X, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -19,10 +21,13 @@ import type { ToolCallView } from "@/lib/work-artifact-views";
 import type { WorkArtifact } from "@/lib/work-artifacts";
 import type { WorkflowEvent } from "@/lib/db";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
-import { formatElapsed, type StreamActivityPhase } from "./streaming-status";
+// formatElapsed 原用于 IDE 视图的 activeLabel，隐藏该板块后暂时用不上；恢复时加回下面的 import。
+import { type StreamActivityPhase } from "./streaming-status";
 import type { ChatMessage } from "./types";
 
-const WorkPanelIde = lazy(() => import("@/components/work-panel/WorkPanelIde").then((m) => ({ default: m.WorkPanelIde })));
+// 2026-07-18 用户要求隐藏「IDE 视图」板块（文件树 + 文件查看器），代码保留未删。
+// 恢复时取消下面这行注释，并放开下方渲染处的 JSX 注释。
+// const WorkPanelIde = lazy(() => import("@/components/work-panel/WorkPanelIde").then((m) => ({ default: m.WorkPanelIde })));
 
 // 真实事故（2026-07-05）：这里之前不管切换的真实原因是什么，一律显示写死的
 // "限额自动切换"（workPanel.switchedNote）——用户所有 provider 都有额度，却每次
@@ -77,16 +82,18 @@ export function ChatWorkPanel({
   disabled,
   onMainModelChange,
   onNodeModelChange,
-  conversationId,
-  workspacePath,
+  // conversationId / workspacePath 原专供已隐藏的「IDE 视图」，恢复该板块时放开这两行解构
+  // conversationId,
+  // workspacePath,
   artifacts,
   toolCalls,
   evalRuns = [],
   evalResults = [],
-  running,
-  streamActivityPhase,
-  streamElapsedMs,
-  activeModelLabel,
+  // running / streamActivityPhase / streamElapsedMs / activeModelLabel 原专供已隐藏的「IDE 视图」activeLabel，恢复时放开这四行解构
+  // running,
+  // streamActivityPhase,
+  // streamElapsedMs,
+  // activeModelLabel,
   messages,
   playbookMemories = [],
   playbookProjectId = null,
@@ -225,6 +232,9 @@ export function ChatWorkPanel({
               <IntentDiagnostics />
             </>
           )}
+          {/* 2026-07-18 用户要求隐藏「IDE 视图」板块（文件树 + 文件查看器），代码保留未删。
+              恢复方法：去掉本段最外层的 JSX 注释符，让下面的 JSX 重新生效；并在文件顶部
+              重新引入 lazy、Suspense、formatElapsed，取消 WorkPanelIde 的 lazy import 注释。
           <Suspense
             fallback={
               <div className="glass rounded-2xl border border-white/5 p-4 text-[11px] font-bold uppercase tracking-widest text-muted-foreground/50">
@@ -244,6 +254,7 @@ export function ChatWorkPanel({
               }
             />
           </Suspense>
+          */}
           {artifacts.length > 0 && (
             <details className="group">
               <summary className="cursor-pointer list-none px-4 py-3 text-[9px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 hover:text-foreground">

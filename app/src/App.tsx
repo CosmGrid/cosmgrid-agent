@@ -26,6 +26,7 @@ import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { OnboardingModal } from "@/pages/OnboardingModal";
 import { disposeBackgroundSessionsForClose } from "@/lib/app-close";
 import { migrateLegacyMcpServerSecrets } from "@/lib/mcp/secret-store";
+import { initializeApp } from "@/lib/app-initialization";
 
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
 const ProvidersPage = lazy(() => import("@/pages/ProvidersPage").then((m) => ({ default: m.ProvidersPage })));
@@ -155,21 +156,24 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void initSchema()
-      .then(() => seedBuiltInTemplates())
-      .then(() => seedBuiltinSkills())
-      // 阶段 3 review F-02 修复：skill seed 失败不应让应用进入 dbError 状态。
-      // 选 上 selector 有 CORE_SKILLS 兜底，缺 seed 只意味着"少 3 条 builtin"，
-      // 不影响主聊天/工具流。降级为 warn + 仍 setDbReady，让用户进 UI 才能手动修复。
-      .catch((err: unknown) => {
+    void initializeApp({
+      initSchema,
+      seedBuiltInTemplates,
+      seedBuiltinSkills,
+      warn: (err: unknown) => {
         console.warn(
           "[seedBuiltinSkills] 失败；selector 会用 CORE_SKILLS 常量兜底，" +
-          "功能可用但 skill 列在 DB 侧未登记。重启重试。err =",
+            "功能可用但 skill 列在 DB 侧未登记。重启重试。err =",
           err,
         );
-      })
-      .then(() => setDbReady(true))
-      .catch((err: unknown) => setDbError(err instanceof Error ? err.message : String(err)));
+      },
+    }).then((result) => {
+      if (result.ok) {
+        setDbReady(true);
+      } else {
+        setDbError(result.error instanceof Error ? result.error.message : String(result.error));
+      }
+    });
   }, []);
 
   useEffect(() => {

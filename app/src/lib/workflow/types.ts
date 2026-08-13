@@ -169,6 +169,18 @@ export interface WorkflowSnapshot {
      */
     lastVerificationSummary?: string;
     riskLevel: "low" | "medium" | "high";
+    /**
+     * 工作流"实际动作可视化"阶段1（2026-07-18）：非权威的"观测字段"——回合结束时根据
+     * 本轮真实调用的工具类型（见 lib/workflow/observed-activity.ts deriveObservedActivity）
+     * 算出的"这轮主要活动是读/写/命令"。只给展示层（derive-chain-node-graph.ts）加视觉态用，
+     * **不是**权威状态机的一部分，不影响 currentNodeId / node.status / run.status 的推进。
+     * 可选字段，不破坏现有快照（旧快照没有这个字段时按"无观测数据"处理）。
+     */
+    lastObservedActivity?: {
+      phases: WorkflowPhase[];
+      dominant: WorkflowPhase | null;
+      observedAt: string;
+    };
   };
   pendingDecision?: {
     nodeId: string;

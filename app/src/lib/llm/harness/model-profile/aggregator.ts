@@ -8,8 +8,7 @@
 // - 已存在的 enabled event 不重复建议（existingEventKeys 查重）
 // - sample_count < minSamples（默认 5）的不进 aggregator（统计无意义）
 
-import { modelHarnessProfileEvents } from "@/lib/db";
-import type { TaskOutcomeValue } from "@/lib/db";
+import { modelHarnessProfileEvents, type TaskOutcomeValue } from "@/lib/db";
 import type { FailureKind, AdaptationRule, WeaknessReport, WeaknessEntry } from "./types";
 import {
   failureKindFromEvalResult,

@@ -9,8 +9,7 @@
 
 import { getDb } from "./connection";
 import { now } from "./utils";
-import type { ScopeLevelLiteral } from "@/lib/policy/scope-key";
-import { keyToScope, scopeToKey } from "@/lib/policy/scope-key";
+import { keyToScope, scopeToKey, type ScopeLevelLiteral } from "@/lib/policy/scope-key";
 import type { PolicyScope } from "@/lib/policy/types";
 
 export type HistoryAction = "set" | "clear" | "bulk_clear";

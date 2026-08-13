@@ -1,7 +1,6 @@
 import type { ToolExecutionRow, DbMessage } from "@/lib/db";
 import { parseAttachments } from "@/lib/llm/attachments";
-import type { RoleId } from "@/lib/llm/orchestrator";
-import { ROLE_IDS } from "@/lib/llm/orchestrator";
+import { ROLE_IDS, type RoleId } from "@/lib/llm/orchestrator";
 import type { ReadRecord, FetchRecord, ExecRecord } from "@/lib/llm/harness/verify-claims";
 import type { ModelListItem } from "@/lib/api";
 import type { ChatMessage, ReceiptContent } from "./types";

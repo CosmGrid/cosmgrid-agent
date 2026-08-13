@@ -83,8 +83,13 @@ export function ChainNodeGraph({ nodes, availableModels, disabled, onMainModelCh
                   className={cn(
                     "relative min-w-[132px] max-w-[172px] rounded-xl border px-3 py-2 shadow-lg transition-all duration-300",
                     statusClass(node.status),
+                    // 工作流"实际动作可视化"阶段1（2026-07-18）：非权威展示态——本轮 AI
+                    // 真的在这个阶段动过手（工具调用观测命中），加一圈轻量高亮，不改动
+                    // status 本身的配色逻辑。
+                    node.touched && "ring-2 ring-sky-400/70 ring-offset-1 ring-offset-background",
                   )}
                   data-status={node.status}
+                  data-touched={node.touched ? "true" : undefined}
                   aria-current={node.status === "running" || node.status === "active" ? "step" : undefined}
                 >
                   <div className="flex items-center gap-1.5 min-w-0">

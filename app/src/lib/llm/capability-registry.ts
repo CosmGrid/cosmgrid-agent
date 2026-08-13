@@ -59,6 +59,42 @@ const CAP_TOOL_KIND_GRANTS: Readonly<Record<string, ReadonlyArray<GatedToolKind>
   inspect_failures: ["command"],
 });
 
+/**
+ * 工作流"实际动作可视化"阶段1（2026-07-18）：TOOL_NAME → ToolSecurityKind 静态映射表。
+ *
+ * 用途：deriveObservedActivity（lib/workflow/observed-activity.ts）需要按"本轮真实调过
+ * 哪些工具"反推"这轮主要在读/写/跑命令"，但 workflow 层不该反向依赖 lib/llm/tools（L6，
+ * depcruise l6-tools-no-upstack-runtime 就是反过来禁止 tools 依赖 workflow，同理 workflow
+ * 也不该依赖 tools 制造循环）。这张表把"工具名 → security.kind"这份中立事实抄一份放在
+ * capability-registry.ts 这个中立层，workflow 层只 import 这张纯数据表，不 import tools 模块。
+ *
+ * 值来源：逐一抄自 lib/llm/tools/*.ts 每个工具定义的 `security.kind` 字段。新增/删除工具时
+ * 必须同步这张表——守卫测试（capability-registry.test.ts）会遍历
+ * createDefaultToolRegistry({ includeWrite: true }).list()，断言每个工具的 name 都在这张表
+ * 里且 kind 与工具自身声明一致，漏更新会让测试变红（防止静默漂移）。
+ */
+export const TOOL_NAME_SECURITY_KIND: Readonly<Record<string, ToolSecurityKind>> = Object.freeze({
+  read: "read-path",
+  glob: "read-path",
+  grep: "read-path",
+  git_read: "read-path",
+  lsp_diagnostics: "read-path",
+  lsp_definition: "read-path",
+  lsp_hover: "read-path",
+  view_image: "read-path",
+  write: "write-path",
+  edit: "write-path",
+  hashline_edit: "write-path",
+  bash: "command",
+  remember: "none",
+  web_fetch: "none",
+  web_search: "none",
+  todo_write: "none",
+  ask_user_question: "none",
+  report_no_changes_needed: "none",
+  skill: "none",
+});
+
 export interface SkillToolAccessCheck {
   ok: boolean;
   /** 拒绝原因（给 UI/日志）；ok=true 时为空串。 */

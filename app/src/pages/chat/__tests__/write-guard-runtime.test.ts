@@ -12,46 +12,40 @@ const writeDecision: TurnIntentDecision = {
   patch: { executionMode: "execute_directly" },
 };
 
+// 2026-07-18 写权限双层重构：resolveWriteGuardRuntime 不再"逼用户升级权限档"——
+// 原 escalatePermission 弹窗 + promptedConversationIds 去重逻辑已删除，权限档完全由用户
+// 在输入框旁边的三档开关自己切。函数现在只做提示（没有工作文件夹 / 只读档写意图），
+// 不再返回 effectivePermissionMode（恒等于入参，调用方直接用入参即可）。
 describe("resolveWriteGuardRuntime", () => {
   it("普通聊天不改权限，也不插提示", async () => {
     const setMessages = vi.fn();
 
-    const result = await resolveWriteGuardRuntime({
+    await resolveWriteGuardRuntime({
       text: "解释一下这个概念",
       decision: null,
       workspacePath: "/tmp/project",
       permissionMode: "read",
-      conversationId: "conv-1",
       assistantId: "assistant-1",
-      promptedConversationIds: new Set(),
-      escalatePermission: vi.fn(),
       labels: labels(),
       setMessages,
     });
 
-    expect(result.effectivePermissionMode).toBe("read");
     expect(setMessages).not.toHaveBeenCalled();
   });
 
-  it("有写意图但没有工作区时只插提示，不弹权限升级", async () => {
+  it("有写意图但没有工作区时插入 noWorkspace 提示", async () => {
     const setMessages = vi.fn();
-    const escalatePermission = vi.fn();
 
-    const result = await resolveWriteGuardRuntime({
+    await resolveWriteGuardRuntime({
       text: "帮我写入文件",
       decision: writeDecision,
       workspacePath: null,
       permissionMode: "read",
-      conversationId: "conv-1",
       assistantId: "assistant-1",
-      promptedConversationIds: new Set(),
-      escalatePermission,
       labels: labels(),
       setMessages,
     });
 
-    expect(result.effectivePermissionMode).toBe("read");
-    expect(escalatePermission).not.toHaveBeenCalled();
     const update = setMessages.mock.calls[0]?.[0] as (messages: ChatMessage[]) => ChatMessage[];
     expect(update([{ id: "assistant-1", role: "assistant", content: "" }])).toMatchObject([
       { content: "no workspace", kind: "system-notice" },
@@ -59,50 +53,56 @@ describe("resolveWriteGuardRuntime", () => {
     ]);
   });
 
-  it("只读工作区首次写入会弹权限升级，同意后切到确认模式", async () => {
-    const prompted = new Set<string>();
+  it("只读档位 + 有工作区 + 有写意图：插入 readOnly 友好提示，不再弹权限升级", async () => {
     const setMessages = vi.fn();
 
-    const result = await resolveWriteGuardRuntime({
+    await resolveWriteGuardRuntime({
       text: "保存到文件",
       decision: writeDecision,
       workspacePath: "/tmp/project",
       permissionMode: "read",
-      conversationId: "conv-1",
       assistantId: "assistant-1",
-      promptedConversationIds: prompted,
-      escalatePermission: vi.fn(async () => true),
       labels: labels(),
       setMessages,
     });
 
-    expect(result.effectivePermissionMode).toBe("confirm");
-    expect(prompted.has("conv-1")).toBe(true);
-    expect(setMessages).not.toHaveBeenCalled();
-  });
-
-  it("用户拒绝权限升级时插入只读提示", async () => {
-    const setMessages = vi.fn();
-
-    const result = await resolveWriteGuardRuntime({
-      text: "保存到文件",
-      decision: writeDecision,
-      workspacePath: "/tmp/project",
-      permissionMode: "read",
-      conversationId: "conv-1",
-      assistantId: "assistant-1",
-      promptedConversationIds: new Set(),
-      escalatePermission: vi.fn(async () => false),
-      labels: labels(),
-      setMessages,
-    });
-
-    expect(result.effectivePermissionMode).toBe("read");
     const update = setMessages.mock.calls[0]?.[0] as (messages: ChatMessage[]) => ChatMessage[];
     expect(update([{ id: "assistant-1", role: "assistant", content: "" }])[0]).toMatchObject({
       content: "read only",
       kind: "system-notice",
     });
+  });
+
+  it("confirm 档位 + 有工作区 + 有写意图：不插提示（能写，写盘走下游确认）", async () => {
+    const setMessages = vi.fn();
+
+    await resolveWriteGuardRuntime({
+      text: "保存到文件",
+      decision: writeDecision,
+      workspacePath: "/tmp/project",
+      permissionMode: "confirm",
+      assistantId: "assistant-1",
+      labels: labels(),
+      setMessages,
+    });
+
+    expect(setMessages).not.toHaveBeenCalled();
+  });
+
+  it("auto 档位 + 有工作区 + 有写意图：不插提示", async () => {
+    const setMessages = vi.fn();
+
+    await resolveWriteGuardRuntime({
+      text: "保存到文件",
+      decision: writeDecision,
+      workspacePath: "/tmp/project",
+      permissionMode: "auto",
+      assistantId: "assistant-1",
+      labels: labels(),
+      setMessages,
+    });
+
+    expect(setMessages).not.toHaveBeenCalled();
   });
 });
 

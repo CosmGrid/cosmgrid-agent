@@ -1,6 +1,7 @@
 import {
   compressHistory,
   compressHistoryWithSummary,
+  estimateMessagesTokens,
   type ChatMsg,
 } from "@/lib/llm/context-compressor";
 import { resolveContextBudget } from "@/lib/llm/model-limits";
@@ -72,6 +73,10 @@ export async function applyPromptCompressionWithSummary(args: {
   precheck?: (droppedCount: number) => boolean | Promise<boolean>;
   /** 摘要落库配置（不传 = 不落库，方便 test/diagnostics） */
   persistence?: SummaryPersistence;
+  /** 本轮 AbortSignal，透传给摘要 LLM，避免其挂起整轮（B3） */
+  abortSignal?: AbortSignal;
+  /** 压缩真正发生前的回调（诊断可见性：显示「正在压缩历史」） */
+  onCompressStart?: () => void;
 }): Promise<PromptCompressionResult> {
   if (!args.enabled) {
     return { messages: args.messages, compressionStats: null };
@@ -99,6 +104,10 @@ export async function applyPromptCompressionWithSummary(args: {
 
   // 摘要式：复用压缩器预算逻辑，丢的进摘要，没丢的不动
   // - HistorySummary → 文本序列化在闭包里完成
+  // 压缩真正要发生时（超过预算），先回调通知 UI 显示「正在压缩历史」
+  if (args.onCompressStart && estimateMessagesTokens(args.messages) > maxTokens) {
+    args.onCompressStart();
+  }
   const compressed = await compressHistoryWithSummary(args.messages, {
     maxTokens,
     noticeText: args.noticeText,
@@ -108,7 +117,7 @@ export async function applyPromptCompressionWithSummary(args: {
         const ok = await args.precheck(dropped.length);
         if (!ok) return null;
       }
-      const summary = await summarizeDroppedHistory(dropped, summarizeModel);
+      const summary = await summarizeDroppedHistory(dropped, summarizeModel, args.abortSignal);
       if (!summary) return null;
       // 把结构化摘要暂存到闭包外——compressHistoryWithSummary 不暴露中间状态，
       // 但我们要落库需要这个。Promise.all 不便；用一个共享 holder 是最简洁的写法。

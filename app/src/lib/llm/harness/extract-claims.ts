@@ -16,7 +16,7 @@
 
 // 动词 + 带扩展名的文件路径（目录前缀可选，末段必须带扩展名，排除 /app /think 这种无扩展词）
 const CLAIM_RE =
-  /(?:读取了|读取|读过|读了|查看了|查看过|查看|看过|看了|已读|阅读了|阅读|打开了|打开|加载了|载入了|反推自|反推出|挖到|挖出|抓到|抓取到|扒出|提取自|提取出|拆解出|分析出|(?:I\s+)?(?:read|loaded|opened|viewed|checked|reverse[- ]engineered|extracted\s+from)(?:\s+(?:file|the\s+file))?)\s*[`'"\(\[]?\s*((?:[\/A-Za-z0-9._\-]+\/)*[A-Za-z0-9._\-]+\.[A-Za-z0-9]{1,8})/gi;
+  /(?:读取了|读取|读过|读了|查看了|查看过|查看|看过|看了|已读|阅读了|阅读|打开了|打开|加载了|载入了|反推自|反推出|挖到|挖出|抓到|抓取到|扒出|提取自|提取出|拆解出|分析出|(?:I\s+)?(?:read|loaded|opened|viewed|checked|reverse[- ]engineered|extracted\s+from)(?:\s+(?:file|the\s+file))?)\s*[`'"([]?\s*((?:[/A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8})/gi;
 
 /**
  * 从 assistant 文本提取模型「声明读取过」的文件路径（语境提取，非所有路径）。
@@ -40,7 +40,7 @@ export function extractFilePaths(text: string): string[] {
 // 补一条同思路的 URL claim 提取：动词 + 紧跟着的 URL，才算"声称抓取过"，跟文件路径一样
 // 语境提取、漏报优先于误报（模型没把 URL 写回正文时就漏检，不强行猜）。
 const URL_CLAIM_RE =
-  /(?:读取了|读取|读过|读到了|读到|读了|查看了|查看过|查看|看过|看了|已读|阅读了|阅读|打开了|打开|访问了|访问|抓取了|抓取到|抓到|拉到了|拉到|(?:I\s+)?(?:read|fetched|opened|visited|loaded)(?:\s+(?:the\s+)?(?:page|url|link))?)\s*[:：]?\s*[`'"\(\[]?\s*(https?:\/\/[^\s"'<>)\]，。！？、]+)/gi;
+  /(?:读取了|读取|读过|读到了|读到|读了|查看了|查看过|查看|看过|看了|已读|阅读了|阅读|打开了|打开|访问了|访问|抓取了|抓取到|抓到|拉到了|拉到|(?:I\s+)?(?:read|fetched|opened|visited|loaded)(?:\s+(?:the\s+)?(?:page|url|link))?)\s*[:：]?\s*[`'"([]?\s*(https?:\/\/[^\s"'<>)\]，。！？、]+)/gi;
 
 /**
  * 从 assistant 文本提取模型「声明抓取过」的网页 URL（语境提取，跟 extractFilePaths 同一套思路）。

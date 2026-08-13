@@ -28,8 +28,8 @@ export interface ToolContext {
    *  read-path/none 恒放行，write-path/command 需被授予，否则 denied。
    *  不传 / 空数组 = 不做 K7 enforcement（保持老调用方行为不变）。 */
   activeCaps?: string[];
-  /** ask_user_question 工具用：向用户提一个结构化问题，返回用户选中的 label 文本 */
-  askUser?: (request: AskUserRequest) => Promise<string>;
+  /** ask_user_question 工具用：向用户提问；null 表示任务已停止、用户没有作答。 */
+  askUser?: (request: AskUserRequest) => Promise<string | null>;
   /**
    * executor 按 tool.security 声明跑完前置检查后的结果，工具从这里取，不用自己再调
    * checkPath/checkWritePath/checkCommand。tool.security.kind 为 "read-path"/"write-path"

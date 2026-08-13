@@ -32,7 +32,7 @@ export function impliesWriteIntent(args: { text: string; decision: TurnIntentDec
  *
  * 改成只看权限档位本身，不再用意图判断二次把关，原因：
  * - "confirm" 档位：真正执行写/命令前，useChatStream 里已经有 requestConfirm 弹窗兜底
- *   （见 useChatStream.ts 的 `confirm: effectivePermissionMode === "auto" ? ... : requestConfirm`），
+ *   （见 workspace-runtime.ts 的 `confirm: permissionMode === "auto" ? ... : requestConfirm`），
  *   这里的意图判断只是徒增摩擦，没有额外安全价值。
  * - "auto" 档位：虽然没有逐次人工确认，但命令黑名单 + 工作区路径边界检查这两道独立防线
  *   （跟意图判断无关，永远生效）已经拦住真正危险的操作；用户选择"自动"就是要免摩擦执行，

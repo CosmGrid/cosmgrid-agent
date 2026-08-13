@@ -58,6 +58,17 @@ describe("compressHistory", () => {
     expect(kept.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("system 单独撑爆预算时，未超过 minRecent 的最近消息不重复计入 dropped", () => {
+    const recent = [msg("user", "问题"), msg("assistant", "回答")];
+    const ms = [msg("system", "s".repeat(3_000)), ...recent];
+
+    const r = compressHistory(ms, { maxTokens: 100, minRecent: 4 });
+
+    expect(r.compressed).toBe(false);
+    expect(r.droppedCount).toBe(0);
+    expect(r.messages).toEqual(ms);
+  });
+
   it("不修改入参", () => {
     const ms = [msg("user", "a"), msg("assistant", "b")];
     const copy = JSON.parse(JSON.stringify(ms));
@@ -84,6 +95,56 @@ describe("compressHistory", () => {
 describe("estimateMessagesTokens", () => {
   it("含每条 4 token 开销", () => {
     expect(estimateMessagesTokens([msg("user", "abc")])).toBe(estimateTokens("abc") + 4);
+  });
+
+  it("按 AI SDK 的 input/output 真实形状估算结构化工具历史", () => {
+    const withParts: ChatMsg = {
+      role: "assistant",
+      content: "短摘要",
+      parts: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            input: { path: `/tmp/${"a".repeat(3_000)}` },
+          }],
+        },
+        {
+          role: "tool",
+          content: [{
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            output: { type: "text", value: "b".repeat(6_000) },
+          }],
+        },
+      ],
+    };
+
+    expect(() => estimateMessagesTokens([withParts])).not.toThrow();
+    expect(estimateMessagesTokens([withParts])).toBeGreaterThan(2_500);
+  });
+
+  it("遇到 undefined、BigInt 或循环工具值时估算不抛错", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const withUnusualParts: ChatMsg = {
+      role: "assistant",
+      content: "fallback",
+      parts: [{
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "u", toolName: "u", output: undefined },
+          { type: "tool-result", toolCallId: "b", toolName: "b", output: 1n },
+          { type: "tool-result", toolCallId: "c", toolName: "c", output: circular },
+        ],
+      }] as ChatMsg["parts"],
+    };
+
+    expect(() => estimateMessagesTokens([withUnusualParts])).not.toThrow();
+    expect(estimateMessagesTokens([withUnusualParts])).toBeGreaterThan(0);
   });
 });
 

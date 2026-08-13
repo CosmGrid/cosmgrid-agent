@@ -42,8 +42,8 @@ describe("hasEffectiveOutput", () => {
     expect(hasEffectiveOutput("<think>还没想完", 0)).toBe(false);
   });
 
-  it("正文为空但有工具调用 → true（工具型回答本来就可能没有文字正文）", () => {
-    expect(hasEffectiveOutput("", 2)).toBe(true);
+  it("工具调用后仍只有思考、没有最终答复 → false", () => {
+    expect(hasEffectiveOutput("<think>工具没找到，继续想办法</think>", 2)).toBe(false);
   });
 
   it("正文为空且无工具调用 → false", () => {

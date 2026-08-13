@@ -244,6 +244,33 @@ export function markCurrentWorkflowNodeNeedsUser(args: {
   return updateNode(args.snapshot, node.id, { status: "waiting_user" });
 }
 
+/**
+ * 工作流"实际动作可视化"阶段1（2026-07-18）—— 把 deriveObservedActivity 的结果合并进
+ * snapshot.context，返回新 snapshot（spread 复制，不 mutate）。
+ *
+ * 硬性纪律：这是纯粹的"观测字段"写入，**绝不**触碰 currentNodeId / nodes / status /
+ * nextActions / pendingDecision——那些都各有权威 owner（completeCurrentWorkflowNode /
+ * failCurrentWorkflowNode / repairCurrentWorkflowNode 等），动它们会拆掉防死循环熔断。
+ * 调用方（stream-finalization.ts）应该在拿到权威 reducer 的返回值之后，再用这个函数包一层，
+ * 合并进同一次要保存的 snapshot，不单独新开一次 DB 写。
+ */
+export function attachObservedActivity(
+  snapshot: WorkflowSnapshot,
+  activity: { phases: WorkflowPhase[]; dominant: WorkflowPhase | null },
+): WorkflowSnapshot {
+  return {
+    ...snapshot,
+    context: {
+      ...snapshot.context,
+      lastObservedActivity: {
+        phases: activity.phases,
+        dominant: activity.dominant,
+        observedAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
 export function attachPlanSourceToWorkflow(args: {
   snapshot: WorkflowSnapshot;
   summary: string;

@@ -23,6 +23,8 @@ interface ChatInputDockProps {
   activeToolCall: ToolCallView | undefined;
   isStreaming: boolean;
   streamActivityPhase: StreamActivityPhase;
+  /** 本轮已耗时（毫秒）——透传给 WorkingStatusBar 做「响应较慢」提示 */
+  streamElapsedMs: number;
   workspacePath: string | null;
   onClearWorkspace: () => void;
   onChooseWorkspace: () => void;
@@ -52,6 +54,7 @@ export function ChatInputDock({
   activeToolCall,
   isStreaming,
   streamActivityPhase,
+  streamElapsedMs,
   workspacePath,
   onClearWorkspace,
   onChooseWorkspace,
@@ -88,7 +91,7 @@ export function ChatInputDock({
             ) : pendingNextActions && pendingNextActions.length > 0 ? (
               <NextActionsCard actions={pendingNextActions} onPick={onPickNextAction} />
             ) : (
-              <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} phase={streamActivityPhase} />
+              <WorkingStatusBar activeCall={activeToolCall} running={isStreaming} phase={streamActivityPhase} elapsedMs={streamElapsedMs} />
             )}
           </div>
           {workspacePath ? (

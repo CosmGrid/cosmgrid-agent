@@ -19,6 +19,12 @@ export interface ChainNodeView {
   status: ChainNodeVisualStatus;
   pinned: boolean;
   locked?: boolean;
+  /**
+   * 工作流"实际动作可视化"阶段1（2026-07-18）：非权威的展示态——本轮 AI 是否真的在这个
+   * 阶段动过手（来自 WorkflowSnapshot.context.lastObservedActivity.phases 命中）。
+   * 只影响 UI 的一层轻量高亮，不参与 status 的推进判定，也不覆盖已有的 status 语义。
+   */
+  touched?: boolean;
 }
 
 export interface ChainNodeGraphView {
@@ -128,6 +134,16 @@ function workflowNodeStatus(snapshot: WorkflowSnapshot, node: WorkflowNode): Cha
   return "planned";
 }
 
+/**
+ * 工作流"实际动作可视化"阶段1（2026-07-18）：这个阶段本轮是否被观测到真实动过手
+ * （snapshot.context.lastObservedActivity.phases 命中）。没有观测数据（旧快照/纯问答轮）
+ * 时恒为 false——只是"没有额外信息"，不代表"这个阶段没在动"，UI 上不应该因此产生任何
+ * 负面视觉暗示，只是不点亮而已。
+ */
+function isPhaseObservedTouched(snapshot: WorkflowSnapshot, phase: WorkflowPhase): boolean {
+  return snapshot.context.lastObservedActivity?.phases.includes(phase) ?? false;
+}
+
 function shouldShowWorkflowNode(snapshot: WorkflowSnapshot, node: WorkflowNode): boolean {
   if (node.status !== "pending" || snapshot.currentNodeId === node.id) return true;
   if (node.phase === "debate") return snapshot.intent.debateRequested;
@@ -158,6 +174,7 @@ function deriveWorkflowNodes(
       status: workflowNodeStatus(snapshot, node),
       pinned: false,
       locked: true,
+      touched: isPhaseObservedTouched(snapshot, node.phase),
     }));
   const debateNode = deriveDebateNode(snapshot, participants);
   if (debateNode) nodes.push(debateNode);

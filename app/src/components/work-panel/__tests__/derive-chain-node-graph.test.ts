@@ -340,3 +340,122 @@ describe("deriveChainNodeGraph — workflow 阶段节点", () => {
     expect(byRole.execute?.status).toBe("aborted");
   });
 });
+
+// 工作流"实际动作可视化"阶段1（2026-07-18）：context.lastObservedActivity.phases 命中的
+// workflow 节点应该被标记 touched=true，纯展示态，不影响 status 本身。
+describe("deriveChainNodeGraph — touched（观测到本轮真实动过手）", () => {
+  function workflowWithObservedActivity(
+    lastObservedActivity?: { phases: import("@/lib/workflow/types").WorkflowPhase[]; dominant: import("@/lib/workflow/types").WorkflowPhase | null; observedAt: string },
+  ): WorkflowSnapshot {
+    return {
+      version: 1,
+      runId: "run-1",
+      conversationId: "conv-1",
+      status: "running",
+      intent: {
+        objective: "执行方案",
+        requestedOutcome: "按方案落地",
+        taskKind: "feature",
+        executionMode: "execute_directly",
+        reviewRequested: false,
+        debateRequested: false,
+        verificationRequired: false,
+        securitySensitive: false,
+        needsWorkspace: true,
+        stickyUntil: [],
+      },
+      currentNodeId: "execute",
+      nodes: [
+        {
+          id: "read_project",
+          phase: "read_project",
+          title: "读取项目",
+          status: "done",
+          optional: false,
+          dependsOn: [],
+          assignedRoles: [],
+          autoAdvance: "always",
+        },
+        {
+          id: "execute",
+          phase: "execute",
+          title: "执行方案",
+          status: "ready",
+          optional: false,
+          dependsOn: [],
+          assignedRoles: [],
+          autoAdvance: "never",
+        },
+      ],
+      nextActions: [],
+      context: {
+        projectFacts: [],
+        changedFiles: [],
+        riskLevel: "low",
+        ...(lastObservedActivity ? { lastObservedActivity } : {}),
+      },
+    };
+  }
+
+  it("没有 lastObservedActivity（旧快照/纯问答轮）时所有节点 touched 为 falsy", () => {
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: workflowWithObservedActivity(undefined),
+      selectedModelId: "m3",
+      selectedModelName: "MiniMax-M3",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+    });
+
+    const byRole = Object.fromEntries(graph.nodes.map((node) => [node.role, node]));
+    expect(byRole.read_project?.touched).toBeFalsy();
+    expect(byRole.execute?.touched).toBeFalsy();
+  });
+
+  it("lastObservedActivity.phases 命中 execute 时，execute 节点 touched=true，未命中的 read_project 不受影响", () => {
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: workflowWithObservedActivity({
+        phases: ["execute"],
+        dominant: "execute",
+        observedAt: "2026-07-18T00:00:00.000Z",
+      }),
+      selectedModelId: "m3",
+      selectedModelName: "MiniMax-M3",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+    });
+
+    const byRole = Object.fromEntries(graph.nodes.map((node) => [node.role, node]));
+    expect(byRole.execute?.touched).toBe(true);
+    expect(byRole.read_project?.touched).toBeFalsy();
+  });
+
+  it("lastObservedActivity.phases 同时命中 read_project 和 execute 时，两个节点都 touched=true", () => {
+    const graph = deriveChainNodeGraph({
+      orchestration: null,
+      workflowSnapshot: workflowWithObservedActivity({
+        phases: ["read_project", "execute"],
+        dominant: "execute",
+        observedAt: "2026-07-18T00:00:00.000Z",
+      }),
+      selectedModelId: "m3",
+      selectedModelName: "MiniMax-M3",
+      availableModels: models,
+      chainRunning: false,
+      chainExecutedRoles: [],
+      chainSkippedRoles: [],
+      chainAbortedRole: null,
+    });
+
+    const byRole = Object.fromEntries(graph.nodes.map((node) => [node.role, node]));
+    expect(byRole.read_project?.touched).toBe(true);
+    expect(byRole.execute?.touched).toBe(true);
+  });
+});

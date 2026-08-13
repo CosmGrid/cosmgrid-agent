@@ -36,6 +36,21 @@ describe("askUserTool", () => {
     expect(res.output).toContain("Tavily（推荐）");
   });
 
+  it("停止任务时把未回答标成取消，不能伪造成用户选择了空字符串", async () => {
+    const askUser = vi.fn().mockResolvedValue(null);
+    const ctx: ToolContext = { workspacePath: "", askUser };
+
+    const res = await askUserTool.execute(
+      { question: "选哪个？", options: [{ label: "A" }, { label: "B" }] },
+      ctx,
+    );
+
+    expect(res.status).toBe("error");
+    expect(res.error?.code).toBe("TOOL_DENIED");
+    expect(res.output).toContain("取消");
+    expect(res.output).not.toContain("用户选择：");
+  });
+
   it("只读工具，无副作用", () => {
     expect(askUserTool.readOnly).toBe(true);
   });

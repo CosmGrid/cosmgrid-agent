@@ -94,6 +94,16 @@ export function buildPromptFromMessages(messages: readonly CliMessage[]): string
 //   - claude：--permission-mode plan|acceptEdits（读写总闸）
 //   - 两者通用：--add-dir <目录> 把工作区之外的目录（用户确认放行的桌面）并入可写范围
 // writableRoots 由上层在"确认写/自动 + 用户确认放行"后填入（见 useChatStream 的折中弹窗）。
+//
+// 现状标注（2026-07-18 写权限双层重构）：这条 read→plan/read-only 的映射目前**未接线**——
+// CliAccessOptions.cliAccess 字段在全代码库里从未被赋值过一次（chat-fallback-attempt.ts
+// 只在 `options.cliAccess` 存在时才透传，但没有任何调用方构造过带 cliAccess 的 options），
+// 所以 buildCliArgs/buildCliResumeArgs 里 `access?.permissionMode` 恒为 undefined，实际
+// spawn 出去的 CLI 进程从不带 --permission-mode/--sandbox 参数，沿用各 CLI 自己的默认值。
+// API 路径（useChatStream 内置工具）的 read/confirm/auto 三档语义已在本轮重构里理清
+// （见 app-settings.ts getPermissionMode 默认值改 confirm + tool-permission-policy.ts +
+// write-guard-runtime.ts），但 CLI 路径（spawn claude/codex）的权限档接线是后续独立工作，
+// 目前两条路径的 read 档语义可能不一致——留这条注释防止被遗忘。
 
 export type CliPermissionMode = "read" | "confirm" | "auto";
 

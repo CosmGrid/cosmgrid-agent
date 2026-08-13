@@ -13,8 +13,7 @@
 // 绝不模仿 `judgeFabrication` 内部默认 passed=true 的兜底（如果一定需要兜底，
 // 在 caller 处明确写 passed=null + humanSummary 注明"LLM judge failed"）。
 
-import type { LanguageModel } from "ai";
-import { generateObject } from "ai";
+import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
 
 const JudgeSchema = z.object({

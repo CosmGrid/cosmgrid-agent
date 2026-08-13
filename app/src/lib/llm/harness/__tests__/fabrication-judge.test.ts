@@ -27,6 +27,11 @@ const SUBJECTIVE_PERCENT =
   "整体完成度大约 85%，地基比基线好很多，质量提升明显，比预期要快一些，但仍有少量模块需要打磨优化。";
 const NORMAL_KNOWLEDGE_LIMIT_ANSWER =
   "我的知识截止于 2025 年 5 月。但当前时间是你本地的 2026 年 7 月 10 日，所以遇到需要最新信息的问题，直接告诉我，我可以去查。";
+// 2026-07-18 写权限双层重构新增用例：只读档位没有写工具，模型如实拒绝写请求时的典型话术——
+// 不含任何"我已经/我读到/查询到"这类结果性声明，classifyFabricationGate 应该在 A 档
+// 就直接放行（false），不该因为提到了文件名/路径就被误判成"编造已执行写操作"。
+const READ_ONLY_HONEST_DECLINE =
+  "⚠️ 当前权限档位是「只读」，我没有写文件的工具，没办法帮你创建或修改这个文件。如果确实需要改文件，请把权限切到「确认写」或「自动」后再发一次。";
 
 describe("shouldJudgeFabrication 门控", () => {
   const base = { regexClean: true, finishReason: "stop", toolCallCount: 0, content: LONG_FABRICATED };
@@ -128,6 +133,14 @@ describe("classifyFabricationGate 档位分流", () => {
     expect(first).toBe("B");
     expect(second).toBe("B");
     expect(third).toBe("A");
+  });
+
+  // 写权限双层重构（2026-07-18）：read 档没有写工具，模型 0 工具调用如实说"没权限写"时，
+  // 不该被误判成"编造已执行写操作"——不进裁判（false），不打断这条诚实回答的正常收尾。
+  it("read 档写被拒、模型如实拒绝 → false（不进裁判，不误判编造）", () => {
+    expect(
+      classifyFabricationGate({ ...base, toolCallCount: 0, content: READ_ONLY_HONEST_DECLINE }),
+    ).toBe(false);
   });
 });
 
