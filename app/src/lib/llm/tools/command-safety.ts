@@ -70,6 +70,17 @@ function firstProgramFromTokens(tokens: string[]): string {
   return tokens[i] ?? "";
 }
 
+// 环境变量读取包装器是不可覆盖的硬拒绝：它们能直接泄露进程凭据，不能由
+// extraAllowed 或数据库 override 恢复。仅按首程序的精确身份匹配，避免误伤参数/文件名。
+const HARD_DENIED_PROGRAMS = new Set(["env", "printenv"]);
+
+function isHardDeniedProgram(program: string): boolean {
+  const basename = program.split(/[\\/]/).pop() ?? program;
+  const normalized = basename.toLowerCase();
+  const identity = normalized.endsWith(".exe") ? normalized.slice(0, -4) : normalized;
+  return HARD_DENIED_PROGRAMS.has(identity);
+}
+
 /** 命令是否含真正的重定向操作符（> >>），不是引号内字符串里出现的 ">"。 */
 function hasRedirectOperator(cmd: string): boolean {
   let tokens: ShellToken[];
@@ -190,6 +201,9 @@ export function checkCommand(
   const segments = tokenizeSegments(cmd);
   for (const seg of segments) {
     const prog = firstProgramFromTokens(seg);
+    if (isHardDeniedProgram(prog)) {
+      return { verdict: "block", reason: `程序 "${prog}" 被安全策略禁止` };
+    }
     if (!extraAllowed.has(prog)) {
       return { verdict: "block", reason: `程序 "${prog || seg.join(" ")}" 不在白名单` };
     }
@@ -206,7 +220,7 @@ const READONLY_PROGRAMS = new Set([
   // 2026-07-15 review 修复：find 也从这里移除——isReadOnlyCommand 只看程序名不看参数，
   // `find . -delete` / `find /path -exec rm {} +` 会被当"纯只读"直接跳过确认，
   // 真的删文件/跑任意程序。find 本身能写，跟 sed/awk 这批一样应该走确认。
-  "cd", "which", "type", "date", "env", "printenv",
+  "cd", "which", "type", "date",
   "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
   "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
 ]);

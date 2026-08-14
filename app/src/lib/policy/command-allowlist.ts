@@ -36,7 +36,7 @@ export const BUILTIN_ALLOWED_PROGRAMS: ReadonlySet<string> = Object.freeze(
     "tsc", "vitest", "jest", "eslint", "prettier", "python", "python3", "pip", "pip3", "cargo", "go",
     // 常用 shell 工具：切目录 + 文本处理 + 文件/路径工具。无网络、无提权、无破坏性；
     // 危险用法（rm -rf / sudo / 重定向裸设备 / curl|sh 等）仍由上方黑名单拦截。
-    "cd", "which", "type", "date", "env", "printenv",
+    "cd", "which", "type", "date",
     "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
     "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
     "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",

@@ -12,6 +12,7 @@ import { setShellAdapter, type ShellAdapter } from "../shell-adapter";
 import { bashTool } from "../bash-tool";
 import { executeTool } from "../executor";
 import type { ToolContext } from "../types";
+import { invalidateAllowlistResolveCache } from "@/lib/policy/command-allowlist";
 
 const dbMocks = vi.hoisted(() => ({
   create: vi.fn().mockResolvedValue("id"),
@@ -39,6 +40,8 @@ let runArgsSpy: ReturnType<typeof vi.fn>;
 let runSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  invalidateAllowlistResolveCache();
+  policyStoreMocks.get.mockResolvedValue(null);
   runArgsSpy = vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", code: 0 });
   // run（sh -c）保留但 AI 工具不应再调用它——D2 强保证：所有执行都走 runArgs。
   runSpy = vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 });
@@ -72,6 +75,34 @@ describe("bash 工具 — 安全闸", () => {
   it("非白名单命令被拦截", async () => {
     const r = await executeTool(bashTool, { command: "brew install x" }, ctx(vi.fn().mockResolvedValue(true)));
     expect(r.status).toBe("denied");
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["env", "printenv"])("环境变量读取包装器被拦截，不弹确认、不执行：%s", async (command) => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command }, ctx(confirm));
+    expect(r.status).toBe("denied");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["/usr/bin/env", "/usr/bin/env"],
+    ["'C:\\Windows\\System32\\env.exe'", "C:\\Windows\\System32\\env.exe"],
+  ])("真实 override 链仍硬拒绝精确覆盖命令：%s", async (command, token) => {
+    policyStoreMocks.get.mockImplementation(async (_key: string, scope: { level: string }) => {
+      if (scope.level === "global") return JSON.stringify(["env", token]);
+      return null;
+    });
+    invalidateAllowlistResolveCache();
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command }, ctx(confirm));
+    expect(r.status).toBe("denied");
+    expect(r.output).toContain("被安全策略禁止");
+    expect(r.error?.rootCauseHint).toContain("被安全策略禁止");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
     expect(runSpy).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 // command-safety 红队测试（v0.7 阶段4b：bash 安全核心，安全关键）
 import { describe, it, expect } from "vitest";
 import { checkCommand, firstProgram, isReadOnlyCommand, tryParseProgramArgs } from "../command-safety";
+import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 
 describe("firstProgram", () => {
   it("取首个程序名", () => {
@@ -28,6 +29,10 @@ describe("isReadOnlyCommand（只读免确认判定）", () => {
     "NODE_ENV=dev git log",        // 带 env 前缀
   ])("只读命令放行：%s", (cmd) => {
     expect(isReadOnlyCommand(cmd)).toBe(true);
+  });
+
+  it.each(["env", "printenv API_KEY"])("环境变量读取包装器不免确认：%s", (cmd) => {
+    expect(isReadOnlyCommand(cmd)).toBe(false);
   });
 
   it.each([
@@ -81,6 +86,64 @@ describe("白名单命令 → allow", () => {
   ])("allow: %s", (cmd) => {
     expect(checkCommand(cmd).verdict).toBe("allow");
   });
+});
+
+describe("环境变量读取包装器 → hard block", () => {
+  it.each([
+    ["env", "env"],
+    ["env node -e \"console.log(1)\"", "env"],
+    ["printenv", "printenv"],
+    ["printenv API_KEY", "printenv"],
+    ["FOO=bar env", "env"],
+    ["/usr/bin/env", "/usr/bin/env"],
+    ["/usr/bin/printenv", "/usr/bin/printenv"],
+    ["ENV", "ENV"],
+    ["PRINTENV.EXE", "PRINTENV.EXE"],
+    ["git status && env", "env"],
+    ["git status | printenv", "printenv"],
+  ])("默认及精确 override 白名单均 hard block：%s", (cmd, exactProgramToken) => {
+    const defaultCheck = checkCommand(cmd);
+    expect(defaultCheck.verdict).toBe("block");
+    const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, exactProgramToken]);
+    const overrideCheck = checkCommand(cmd, [], extraAllowed);
+    expect(overrideCheck.verdict).toBe("block");
+    expect(overrideCheck.reason).toContain("被安全策略禁止");
+  });
+
+  it.each([
+    ["'C:\\Windows\\System32\\env.exe'", "C:\\Windows\\System32\\env.exe"],
+    ["'C:\\Tools\\PRINTENV.EXE'", "C:\\Tools\\PRINTENV.EXE"],
+  ])("Windows 路径 token 精确加入 override 仍 hard block：%s", (cmd, token) => {
+    const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, token]);
+    expect(checkCommand(cmd, [], extraAllowed).verdict).toBe("block");
+  });
+
+  it.each([
+    ["environment.exe", "environment.exe"],
+    ["myenv.exe", "myenv.exe"],
+    ["'C:\\Windows\\System32\\environment.exe'", "C:\\Windows\\System32\\environment.exe"],
+  ])("相似但不同的程序身份不误伤：%s", (cmd, token) => {
+    const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, cmd]);
+    extraAllowed.add(token);
+    expect(checkCommand(cmd, [], extraAllowed).verdict).toBe("allow");
+  });
+
+  it("printenvironment.exe 不因包含 printenv 而误伤", () => {
+    const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, "printenvironment.exe"]);
+    expect(checkCommand("printenvironment.exe", [], extraAllowed).verdict).toBe("allow");
+  });
+
+  it("参数或文件名含 environment 不误伤合法命令", () => {
+    expect(checkCommand("echo environment").verdict).toBe("allow");
+    expect(checkCommand("cat environment.txt").verdict).toBe("allow");
+  });
+});
+
+describe("关键命令回归", () => {
+  it.each(["pnpm test", "git status", "node -e \"console.log(1)\"", "curl https://example.com"])(
+    "仍 allow：%s",
+    (cmd) => expect(checkCommand(cmd).verdict).toBe("allow"),
+  );
 });
 
 describe("危险命令 → block（红队）", () => {
