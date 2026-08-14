@@ -1,6 +1,6 @@
 // command-safety 红队测试（v0.7 阶段4b：bash 安全核心，安全关键）
 import { describe, it, expect } from "vitest";
-import { checkCommand, firstProgram, isReadOnlyCommand, tryParseProgramArgs } from "../command-safety";
+import { checkCommand, firstProgram, isPureReadCommand, isReadOnlyCommand, tryParseProgramArgs } from "../command-safety";
 import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 import { getCommandClass } from "@/lib/policy/command-program-spec";
 
@@ -21,8 +21,9 @@ describe("isReadOnlyCommand（只读免确认判定）", () => {
     "echo hello",
     "basename src/a.ts",
     "dirname src/a.ts",
-  ])("只读命令放行：%s", (cmd) => {
-    expect(isReadOnlyCommand(cmd)).toBe(true);
+  ])("pure-read 命令仍保留分类但不再免确认：%s", (cmd) => {
+    expect(isReadOnlyCommand(cmd)).toBe(false);
+    expect(isPureReadCommand(cmd)).toBe(false);
   });
 
   it.each(["env", "printenv API_KEY"])("环境变量读取包装器不免确认：%s", (cmd) => {
@@ -49,8 +50,15 @@ describe("isReadOnlyCommand（只读免确认判定）", () => {
 
 describe("P0-01C1 命令分类与严格 grammar", () => {
   it.each(["pwd", "echo hello", "basename src/a.ts", "dirname src/a.ts"]) (
-    "简单 pure-read 允许：%s",
-    (cmd) => expect(checkCommand(cmd).verdict).toBe("allow"),
+    "简单 pure-read 允许但必须真人确认：%s",
+    (cmd) => {
+      expect(checkCommand(cmd)).toMatchObject({
+        verdict: "allow",
+        commandClass: "pure-read",
+        requiresHumanConfirmation: true,
+      });
+      expect(checkCommand(cmd).reason).toContain("可执行文件身份尚未绑定可信系统程序，暂需真人确认");
+    },
   );
   it.each(["git status", "bash -c 'echo ok'", "node -e '1'", "pnpm test"]) (
     "dynamic-exec 仍进入授权流程而非 read 免确认：%s",
@@ -338,8 +346,13 @@ describe("引号内的 shell 元字符不应被误判为分段操作符（2026-0
     expect(checkCommand("git status && echo done").verdict).toBe("block");
   });
 
-  it("引号内的 > 不应被当成真实重定向——只读判定不受影响", () => {
-    expect(isReadOnlyCommand('echo "a > b"')).toBe(true);
+  it("引号内的 > 不应被当成真实重定向——但仍需真人确认", () => {
+    expect(isReadOnlyCommand('echo "a > b"')).toBe(false);
+    expect(checkCommand('echo "a > b"')).toMatchObject({
+      verdict: "allow",
+      commandClass: "pure-read",
+      requiresHumanConfirmation: true,
+    });
   });
 
   it("真正的 > 重定向仍然让命令非只读", () => {

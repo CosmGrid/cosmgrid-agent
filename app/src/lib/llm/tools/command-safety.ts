@@ -177,7 +177,7 @@ function isGitPushCommand(cmd: string): boolean {
 /**
  * 分类一条命令。block 优先于 allow。
  * 仅接受单一 program+argv；组合、重定向、glob、response-file 和解析失败一律 block。
- * 只有 pwd/echo/basename/dirname 的严格 pure-read grammar 可免弹窗；dynamic-exec 需真人确认，
+ * 只有 pwd/echo/basename/dirname 的严格 pure-read grammar 可进入真人确认；dynamic-exec 也需真人确认，
  * 其余分类等待 C2-C4 grammar 工作包开放。
  *
  * 引擎化改造方案阶段 1a：第三参数 `extraAllowed` 接 PolicyStore 已解析的允许程序集合。
@@ -235,14 +235,19 @@ export function checkCommand(
   const commandClass = getCommandClass(prog) as CommandClass;
   if (commandClass === "dynamic-exec") return { verdict: "allow", reason: "动态命令，必须真人确认", commandClass, requiresHumanConfirmation: true };
   if (commandClass === "pure-read" && pureReadGrammar(prog, parsed.args)) {
-    return { verdict: "allow", reason: "纯只读 grammar 命令", commandClass, requiresHumanConfirmation: false };
+    return {
+      verdict: "allow",
+      reason: "可执行文件身份尚未绑定可信系统程序，暂需真人确认",
+      commandClass,
+      requiresHumanConfirmation: true,
+    };
   }
   return { verdict: "block", reason: `${commandClass} 命令当前未开放 grammar`, commandClass, requiresHumanConfirmation: true };
 }
 
 /**
- * 兼容包装：只有 pwd/echo/basename/dirname 的严格 pure-read grammar 返回 true。
- * 组合、重定向、glob、response-file、dynamic-exec 及其他分类均返回 false。
+ * 兼容包装：命令安全分类仍由 checkCommand 返回；此旧布尔接口不再表示免确认。
+ * 为避免调用方把 PATH 可冒充的同名程序当作可信只读程序，所有命令均返回 false。
  */
 export function isReadOnlyCommand(command: string): boolean {
   const cmd = command.trim();
@@ -262,5 +267,6 @@ export function isPureReadCommand(command: string): boolean {
   const parsed = tryParseProgramArgs(cmd);
   if (!parsed || !isKnownCommandProgram(parsed.program)) return false;
   if (parsed.args.some((arg) => isResponseFileToken(parsed.program, arg))) return false;
-  return getCommandClass(parsed.program) === "pure-read" && pureReadGrammar(parsed.program, parsed.args);
+  // 保留上述解析/grammar 校验，防止该兼容接口被误用于任意命令；但不再提供免确认信号。
+  return false;
 }

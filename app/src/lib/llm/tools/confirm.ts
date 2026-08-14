@@ -61,7 +61,6 @@ export async function requireCommandAuthorizationAsV2(
   ctx: ToolContext,
   request: ToolConfirmRequest,
   deniedSummary: string,
-  skipHumanConfirmation = false,
 ): Promise<ToolResultV2 | null> {
   const authorization = ctx.commandAuthorization;
   if (authorization && authorization.permissionMode !== "read" && authorization.permissionMode !== "confirm" && authorization.permissionMode !== "auto") {
@@ -78,7 +77,6 @@ export async function requireCommandAuthorizationAsV2(
       reason: "缺少命令专用人类授权通道",
     });
   }
-  if (skipHumanConfirmation) return null;
   try {
     if ((await authorization.requestHumanConfirm(request)) !== true) {
       return deniedResult({
