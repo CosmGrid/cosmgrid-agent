@@ -91,6 +91,11 @@ describe("policy/command-allowlist", () => {
       expect(BUILTIN_ALLOWED_PROGRAMS.has("systemctl")).toBe(false);
     });
 
+    it("环境变量读取包装器不在内置白名单", () => {
+      expect(BUILTIN_ALLOWED_PROGRAMS.has("env")).toBe(false);
+      expect(BUILTIN_ALLOWED_PROGRAMS.has("printenv")).toBe(false);
+    });
+
     // 2026-07-16 全 parity 档：开发工具链 + shell + 网络抓取进白名单，危险用法仍由黑名单挡。
     it("内置含全 parity 档补的开发工具链 / shell / 网络抓取", () => {
       for (const p of ["make", "docker", "gcc", "java", "cargo", "go", "bash", "sh", "curl", "wget", "pytest"]) {
@@ -235,6 +240,27 @@ describe("policy/command-allowlist", () => {
       );
       const gotB = await resolveAllowedPrograms("proj-B", undefined, store);
       expect(gotB.has("only-for-A")).toBe(false);
+    });
+
+    it("override 加入 env/printenv 后，resolve 结果交给 checkCommand 仍必须 block", async () => {
+      await store.set(
+        commandAllowlistPolicy.key,
+        commandAllowlistGlobalScope(),
+        '["env","printenv"]',
+        "tester",
+      );
+      await store.set(
+        commandAllowlistPolicy.key,
+        commandAllowlistProjectScope("proj-hard-deny"),
+        '["env","printenv"]',
+        "tester",
+      );
+      const got = await resolveAllowedPrograms("proj-hard-deny", undefined, store);
+      const { checkCommand } = await import("@/lib/llm/tools/command-safety");
+      expect(got.has("env")).toBe(true);
+      expect(got.has("printenv")).toBe(true);
+      expect(checkCommand("env", [], got).verdict).toBe("block");
+      expect(checkCommand("printenv API_KEY", [], got).verdict).toBe("block");
     });
 
     it("extraPrograms 覆盖内置（注入点；测试 fallback 用）", async () => {
