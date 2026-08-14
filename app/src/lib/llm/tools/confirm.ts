@@ -51,3 +51,41 @@ export async function requireApprovalAsV2(
     reason: deniedLegacy.output,
   });
 }
+
+/**
+ * 命令执行专用确认门。
+ * 不读取 ctx.confirm：文件写入的 auto 通道不能替代命令的人类授权。
+ * 缺少授权对象、read 模式、缺少 callback、拒绝或 callback 抛错均 fail closed。
+ */
+export async function requireCommandAuthorizationAsV2(
+  ctx: ToolContext,
+  request: ToolConfirmRequest,
+  deniedSummary: string,
+  skipHumanConfirmation = false,
+): Promise<ToolResultV2 | null> {
+  const authorization = ctx.commandAuthorization;
+  if (authorization?.permissionMode === "read" || !authorization?.requestHumanConfirm) {
+    return deniedResult({
+      output: "命令执行需要独立的人类确认通道，当前不可用，已拒绝。",
+      summary: deniedSummary,
+      reason: "缺少命令专用人类授权通道",
+    });
+  }
+  if (skipHumanConfirmation) return null;
+  try {
+    if (!(await authorization.requestHumanConfirm(request))) {
+      return deniedResult({
+        output: "用户拒绝了该命令。",
+        summary: deniedSummary,
+        reason: "用户拒绝命令执行",
+      });
+    }
+    return null;
+  } catch {
+    return deniedResult({
+      output: "命令确认未完成，已拒绝执行。",
+      summary: deniedSummary,
+      reason: "命令专用人类授权通道异常",
+    });
+  }
+}

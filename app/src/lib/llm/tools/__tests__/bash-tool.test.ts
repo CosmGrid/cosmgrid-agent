@@ -52,18 +52,32 @@ beforeEach(() => {
   setShellAdapter(adapter);
 });
 
-function ctx(confirm?: ToolContext["confirm"], blocked?: string[]): ToolContext {
+function ctx(
+  confirm?: ToolContext["confirm"],
+  blocked?: string[],
+  withCommandAuthorization = true,
+): ToolContext {
   // 阶段2（2026-07-11）：每个测试用独立 messageId 隔离 doom-loop 状态，
   // 避免模块级 doomLoopGlobal/ByMessage 在测试间互相污染——同 messageId + 同 tool+input 连续 3 次才会触发拦截。
   return {
     workspacePath: "/ws",
     messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     ...(confirm ? { confirm } : {}),
+    ...(withCommandAuthorization && confirm
+      ? { commandAuthorization: { permissionMode: "confirm" as const, requestHumanConfirm: confirm } }
+      : {}),
     ...(blocked ? { blockedCommands: blocked } : {}),
   };
 }
 
 describe("bash 工具 — 安全闸", () => {
+  it("只有 generic confirm 没有 commandAuthorization 时，命令仍拒绝且不执行", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "pnpm test" }, ctx(confirm, undefined, false));
+    expect(r.status).toBe("denied");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
   it("危险命令被拦截，不弹确认、不执行", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "rm -rf /" }, ctx(confirm));
@@ -123,9 +137,118 @@ describe("bash 工具 — 安全闸", () => {
     expect(r.status).toBe("denied");
     expect(runSpy).not.toHaveBeenCalled();
   });
+
+  it.each(["git status", "ls"])('只读命令缺 commandAuthorization 也拒绝且不执行：%s', async (command) => {
+    const r = await executeTool(bashTool, { command }, ctx());
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["git status", "ls"])('只读命令 read 档即使有 callback 也拒绝且不回调：%s', async (command) => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([["confirm", "git status"], ["auto", "ls"]] as const)(
+    '只读命令 confirm/auto 有完整授权对象时成功且不回调：%s %s',
+    async (permissionMode, command) => {
+      const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+      const r = await executeTool(bashTool, { command }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode, requestHumanConfirm },
+      });
+      expect(r.status).toBe("success");
+      expect(requestHumanConfirm).not.toHaveBeenCalled();
+      expect(runArgsSpy).toHaveBeenCalledWith(command === "git status" ? ["git", "status"] : ["ls"], "/ws");
+    },
+  );
+
+  it.each(["confirm", "auto"] as const)(
+    '只读命令授权对象缺 callback 时拒绝且不执行：%s',
+    async (permissionMode) => {
+      const r = await executeTool(bashTool, { command: "git status" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode },
+      });
+      expect(r.status).toBe("denied");
+      expect(runArgsSpy).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("bash 工具 — 执行", () => {
+  it.each(["pnpm test", "node -e 'console.log(1)'", "bash -c 'echo ok'", "curl https://example.com"])(
+    "confirm 命令走独立真人确认：%s",
+    async (command) => {
+      const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+      const genericConfirm = vi.fn().mockResolvedValue(true);
+      const r = await executeTool(
+        bashTool,
+        { command },
+        {
+          ...ctx(genericConfirm, undefined, false),
+          commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+        },
+      );
+      expect(r.status).toBe("success");
+      expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
+      expect(genericConfirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("auto 命令仍走独立真人确认，不复用自动写入确认", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const genericConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(
+      bashTool,
+      { command: "pnpm test" },
+      {
+        ...ctx(genericConfirm, undefined, false),
+        commandAuthorization: { permissionMode: "auto", requestHumanConfirm },
+      },
+    );
+    expect(r.status).toBe("success");
+    expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
+    expect(genericConfirm).not.toHaveBeenCalled();
+  });
+
+  it("独立真人确认拒绝时不执行", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(false);
+    const r = await executeTool(bashTool, { command: "pnpm test" }, {
+      ...ctx(vi.fn().mockResolvedValue(true), undefined, false),
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("独立真人确认抛错时不执行", async () => {
+    const requestHumanConfirm = vi.fn().mockRejectedValue(new Error("dialog closed"));
+    const r = await executeTool(bashTool, { command: "pnpm test" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("read 权限档即使存在 callback 也拒绝命令", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "pnpm test" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
   it("白名单 + 确认 → 走 runArgs（program+args，不经 sh -c），返回 stdout + exit", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pnpm test" }, ctx(confirm));
@@ -187,7 +310,7 @@ describe("D2：bash 工具走 program+args，组合/注入命令被拦截", () =
   it("合法简单命令：参数里的 shell 元字符被当普通字符串，不触发第二条命令", async () => {
     // echo 是只读命令，免确认；参数 "a && b | c" 含 shell 元字符但被引号包住，
     // runArgs 原样传给 echo，绝不会被解释成第二条命令。
-    const r = await executeTool(bashTool, { command: 'echo "a && b | c"' }, ctx());
+    const r = await executeTool(bashTool, { command: 'echo "a && b | c"' }, ctx(vi.fn().mockResolvedValue(true)));
     expect(r.status).toBe("success");
     expect(runArgsSpy).toHaveBeenCalledWith(["echo", "a && b | c"], "/ws");
     expect(runSpy).not.toHaveBeenCalled();

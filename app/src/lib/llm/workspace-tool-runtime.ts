@@ -17,6 +17,10 @@ export interface WorkspaceToolRuntimeOptions {
    *  让工具执行审计能按真实消息分组，而不是靠时间戳窗口猜。 */
   messageId?: string;
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
+  commandAuthorization?: {
+    permissionMode: "read" | "confirm" | "auto";
+    requestHumanConfirm?: (request: ToolConfirmRequest) => Promise<boolean>;
+  };
   /** 本地 MCP 进程启动前的独立人工授权；不能被 auto 权限档替换为自动同意。 */
   approveMcpLaunch?: (server: McpServerRow, workspacePath?: string) => Promise<boolean>;
   /** ask_user_question 工具用：结构化追问；null 表示停止时未作答。 */
@@ -69,6 +73,7 @@ export async function prepareWorkspaceToolRuntime(
         conversationId: options.conversationId,
         messageId: options.messageId,
         confirm: options.confirm,
+        ...(options.commandAuthorization ? { commandAuthorization: options.commandAuthorization } : {}),
         askUser: options.askUser,
         activeCaps: options.activeCaps,
       });
@@ -94,6 +99,7 @@ export async function prepareWorkspaceToolRuntime(
         conversationId: options.conversationId,
         messageId: options.messageId,
         confirm: options.confirm,
+        ...(options.commandAuthorization ? { commandAuthorization: options.commandAuthorization } : {}),
         askUser: options.askUser,
         blockedCommands: options.blockedCommands,
         activeCaps: options.activeCaps,

@@ -15,7 +15,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "./types";
 import { isReadOnlyCommand, tryParseProgramArgs } from "./command-safety";
 import { getShellAdapter } from "./shell-adapter";
-import { requireApprovalAsV2 } from "./confirm";
+import { requireCommandAuthorizationAsV2 } from "./confirm";
 import {
   deniedResult,
   errorResult,
@@ -69,17 +69,16 @@ export const bashTool: ToolDefinition<BashParams> = {
     // 安全免确认"的情况误记成"用户确认过"。真实是否弹过确认框记在 skippedConfirm 里，
     // 下面所有 return 都显式带上 userConfirmed，不留给 executor-audit.ts 去猜。
     const skippedConfirm = isReadOnlyCommand(input.command);
-    if (!skippedConfirm) {
-      const denied = await requireApprovalAsV2(
-        ctx,
-        {
-          toolName: "bash",
-          summary: `在 ${ctx.workspacePath} 执行：${input.command}`,
-        },
-        "用户拒绝执行 bash",
-      );
-      if (denied) return denied;
-    }
+    const denied = await requireCommandAuthorizationAsV2(
+      ctx,
+      {
+        toolName: "bash",
+        summary: `在 ${ctx.workspacePath} 执行：${input.command}`,
+      },
+      "用户拒绝执行 bash",
+      skippedConfirm,
+    );
+    if (denied) return denied;
 
     // 闸 3：执行 —— 走 runArgs（program+args，不经 sh -c），杜绝路径/参数里的
     // ; && | 等 shell 元字符被解释成第二条命令。

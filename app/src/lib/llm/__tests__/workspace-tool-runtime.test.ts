@@ -98,6 +98,21 @@ describe("prepareWorkspaceToolRuntime", () => {
     expect(mocks.buildWorkspacePreamble).not.toHaveBeenCalled();
   });
 
+  it("构造工具时独立透传 commandAuthorization", async () => {
+    const requestHumanConfirm = vi.fn();
+    const commandAuthorization = { permissionMode: "auto" as const, requestHumanConfirm };
+    await prepareWorkspaceToolRuntime({
+      workspacePath: "/ws",
+      includeWrite: true,
+      confirm: vi.fn(),
+      commandAuthorization,
+    });
+
+    const [, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(ctxArg.commandAuthorization).toBe(commandAuthorization);
+    expect(ctxArg.confirm).not.toBe(requestHumanConfirm);
+  });
+
   it("绑了工作区时也透传 askUser 回调到 ctx", async () => {
     const askUser = vi.fn();
     await prepareWorkspaceToolRuntime({ workspacePath: "/ws", includeWrite: true, askUser });

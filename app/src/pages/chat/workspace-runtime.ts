@@ -43,6 +43,13 @@ export async function prepareChatWorkspaceRuntime(
     if (args.stopIfAborted()) return false;
     return args.permissionMode === "auto" ? true : args.requestConfirm(request);
   };
+  const commandAuthorization = {
+    permissionMode: args.permissionMode,
+    requestHumanConfirm: async (request: ToolConfirmRequest): Promise<boolean> => {
+      if (args.stopIfAborted()) return false;
+      return args.requestConfirm(request);
+    },
+  };
   const approveMcpLaunch: NonNullable<
     Parameters<typeof prepareWorkspaceToolRuntime>[0]["approveMcpLaunch"]
   > = async (server, workspacePath) => {
@@ -76,6 +83,7 @@ export async function prepareChatWorkspaceRuntime(
       conversationId: args.conversationId ?? undefined,
       messageId: args.assistantId,
       confirm,
+      commandAuthorization,
       approveMcpLaunch,
       askUser,
       includePreamble: true,
@@ -97,6 +105,7 @@ export async function prepareChatWorkspaceRuntime(
       conversationId: args.conversationId ?? undefined,
       messageId: args.assistantId,
       confirm,
+      commandAuthorization,
       approveMcpLaunch,
       askUser,
       modelName: args.modelName,
