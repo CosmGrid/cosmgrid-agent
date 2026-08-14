@@ -1,14 +1,14 @@
 /**
  * 引擎化改造方案 §6 阶段 1a：命令白名单引擎化。
  *
- * builtin = 固定在源码里的允许程序集合（v3.1 补 pip3，F1 修正：python3/pip 已在表中）。
- * 用户/项目可在 DB override 追加任意程序名（union 合并，只增不减，安全）。
+ * builtin = command-program-spec.ts 中固定分类程序的键集合。
+ * 用户/项目可在 DB override 追加程序名，但未进入分类事实源的名称会 fail closed。
  *
  * 设计关键：
  *   - 合并语义 union：override 在 builtin 基础上累加，永不删除 builtin——黑名单仍走原始
  *     security-invariants 通道，安全底线不被削弱。
  *   - scopesAllowed = ['project', 'global']：distribution 是发布通道内置，用户切不到；
- *     这条策略允许用户/全局两端写，因为"装新工具不重编译"是用户日常需求。
+ *     这条策略允许用户/全局两端写，但新增名称仍需经过分类事实源才能执行。
  *   - checkCommand 仍可同步（见 command-safety.ts）；调用方 resolve 一次后把 Set 传进去。
  */
 
@@ -16,44 +16,19 @@ import { z } from "zod";
 import type { PolicyDefinition, PolicyScope } from "./types";
 import { PolicyStore, policyStore } from "./policy-store";
 import { scopeToKey } from "./scope-key";
+import { COMMAND_PROGRAM_SPECS } from "./command-program-spec";
 
 /**
  * 内置允许程序（v3.1：补 pip3）。
  *
  * 设计原则（与 command-safety.ts 顶部注释 §1 一致）：
- *   - 放开发常用工具链 + shell 解释器 + 网络抓取（2026-07-16 全 parity 档）；提权/破坏性/
- *     远程访问（sudo / rm -rf / ssh / systemctl 等）仍由黑名单或"默认拒绝"挡。
- *   - 危险用法（rm -rf / sudo / chmod 777 / 管道给解释器 / git push 等）由 DANGEROUS_PATTERNS
- *     拦截，与白名单互补——白名单放程序名，黑名单挡危险用法，两者正交。
- *   - 新增白名单条目（永远内置侧）必须经过 PR 评审 + harness eval，禁止偷偷扩列。
+ *   - 分类与 argv grammar 由 command-safety.ts 统一判定；path/network/unsupported 当前阻断。
+ *   - 新增程序必须先进入分类事实源并经过 PR 评审，override 不能绕过分类。
  *
  * 引擎化后这条 Set 是 policyDefinition.builtin；用户/项目可通过 DB 追加但不删除。
  */
 export const BUILTIN_ALLOWED_PROGRAMS: ReadonlySet<string> = Object.freeze(
-  new Set([
-    "pnpm", "npm", "yarn", "node", "npx",
-    "git", "ls", "cat", "echo", "pwd", "head", "tail", "wc", "grep", "rg", "find",
-    "tsc", "vitest", "jest", "eslint", "prettier", "python", "python3", "pip", "pip3", "cargo", "go",
-    // 常用 shell 工具：切目录 + 文本处理 + 文件/路径工具。无网络、无提权、无破坏性；
-    // 危险用法（rm -rf / sudo / 重定向裸设备 / curl|sh 等）仍由上方黑名单拦截。
-    "cd", "which", "type", "date",
-    "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
-    "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
-    "sed", "awk", "mkdir", "touch", "cp", "mv", "jq",
-    // 2026-07-16 全 parity 档：补齐主流开发工具链 + shell 解释器 + 网络抓取，
-    // 让 AI 能像 Claude Code 一样跑任意语言项目的构建 / 测试 / 打包 / 依赖拉取。
-    // 危险用法（rm -rf / sudo / chmod 777 / 管道给解释器 / git push / publish 等）仍由
-    // DANGEROUS_COMMAND_PATTERNS 黑名单硬挡，与白名单互补，安全底线不放宽。
-    "make", "cmake", "ninja",
-    "gcc", "g++", "cc", "clang", "clang++", "rustc",
-    "java", "javac", "mvn", "gradle", "kotlin", "kotlinc",
-    "ruby", "gem", "bundle", "php", "composer", "bun", "deno", "dotnet", "swift", "perl",
-    "docker", "docker-compose", "podman", "kubectl",
-    "pytest", "ruff", "mypy", "black", "flake8", "poetry", "uv", "uvx", "pyright",
-    "bash", "sh", "zsh",
-    "curl", "wget",
-    "tar", "zip", "unzip", "gzip", "gunzip",
-  ]),
+  new Set(Object.keys(COMMAND_PROGRAM_SPECS)),
 );
 
 /** zod schema：override value_json 必须是 string[]（不允许对象等其它结构）。 */

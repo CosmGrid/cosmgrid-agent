@@ -100,7 +100,7 @@ export interface ToolResultV2 {
   /** 2026-07-15 review 修复：这次执行是否真的弹过确认框并被用户同意——不是从 status/
    *  tool.readOnly 反推的。大多数写工具（write/edit/hashline_edit/memory）无条件走
    *  requireApprovalAsV2，旧的"status !== denied && !tool.readOnly"推导对它们是准的；
-   *  但 bash 工具内部有 isReadOnlyCommand 判定，命中时跳过确认直接执行——这种情况下
+   *  但 bash 工具依据 executor 已验证的 pure-read classification，命中时跳过确认直接执行——这种情况下
    *  tool.readOnly 仍是 false（bash 整体能写），旧推导会把"系统判定安全免确认"误记成
    *  "用户确认过"，审计日志失真。只读工具/未显式声明的工具留 undefined，
    *  persistToolExecution 落库时回退到旧推导（向后兼容，不强制所有工具都改）。 */

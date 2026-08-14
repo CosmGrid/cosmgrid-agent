@@ -3,7 +3,7 @@
 // 全局 scope 的"额外允许命令"UI + 重置按钮 + K10 二次确认。
 //
 // 设计要点：
-//   - 列出当前全局 override（每行一个程序名）；空 = 不 override，AI 仅跑内置白名单。
+//   - 列出当前全局候选程序（每行一个程序名）；未分类程序仍会被安全策略拒绝。
 //   - 保存：先弹 K10 二次确认（参考 VSCode security settings 高风险变更二级弹窗），
 //     确认后才写入 policyStore + audit。
 //   - 重置：弹二次确认 → 调 policyStore.reset(global scope) → K3 cascade 清所有项目级 override。
@@ -113,8 +113,7 @@ export function CommandAllowlistSection() {
         // §5.4 versioning banner 才有依据判断"用户的 override 是按哪个 builtin 时代并入"。
         COMMAND_ALLOWLIST_BUILTIN_VERSION,
       );
-      // 写入 override 后必须失效 resolve 缓存，否则 bash 工具的进程级缓存会继续用旧白名单——
-      // 用户新加的命令要重启 app 才生效，违背引擎化"加命令不重编译/不重启"的核心目的。
+      // 写入候选名单后必须失效 resolve 缓存，否则 bash 工具会继续使用旧的候选集合。
       invalidateAllowlistResolveCache();
       setMessage({ kind: "ok", text: t("settings.security.commandAllowlist.saved") });
     } catch (err) {

@@ -7,13 +7,13 @@
 //
 // Harness 阶段2（2026-07-11）：返回 ToolResultV2。
 // - 拒绝 / 安全拦截 → deniedResult{retryable=false, stopCondition:"等待用户授权或换非写命令"}
-// - 退出码非 0 → errorResult{TOOL_COMMAND_FAILED, retryable 看 isReadOnlyCommand,
+// - 退出码非 0 → errorResult{TOOL_COMMAND_FAILED, retryable 看已验证的 commandClass，
 //   写命令 retryable=false，读命令 retryable=true（重跑一遍有时能复现失败原因）}
 // - 成功 → successResult + command_output artifact + 可选 nextActions（如"运行测试"）。
 
 import { z } from "zod";
 import type { ToolDefinition } from "./types";
-import { isReadOnlyCommand, tryParseProgramArgs } from "./command-safety";
+import { tryParseProgramArgs } from "./command-safety";
 import { getShellAdapter } from "./shell-adapter";
 import { requireCommandAuthorizationAsV2 } from "./confirm";
 import {
@@ -60,24 +60,31 @@ export const bashTool: ToolDefinition<BashParams> = {
       });
     }
 
-    // 闸 2：只读命令（git log/status/diff、ls/cat/grep 等只看不改）免确认，看项目不被打扰；
-    //        写/有副作用命令（装依赖、git 提交、跑脚本等）才需用户确认。
-    //
-    // 2026-07-15 review 修复：bashTool.readOnly 全局声明是 false（bash 整体能写），但走到
-    // 这里的具体命令可能因为 isReadOnlyCommand 判定为真而跳过确认——旧的审计推导
-    // （persistToolExecution 的 "status !== denied && !tool.readOnly"）会把这种"系统判定
-    // 安全免确认"的情况误记成"用户确认过"。真实是否弹过确认框记在 skippedConfirm 里，
-    // 下面所有 return 都显式带上 userConfirmed，不留给 executor-audit.ts 去猜。
-    const skippedConfirm = isReadOnlyCommand(input.command);
-    const denied = await requireCommandAuthorizationAsV2(
-      ctx,
-      {
-        toolName: "bash",
-        summary: `在 ${ctx.workspacePath} 执行：${input.command}`,
-      },
-      "用户拒绝执行 bash",
-      skippedConfirm,
-    );
+    // P0-01C1：只有纯只读 grammar 在 read/confirm/auto 都可放行；所有命令安全边界
+    // 均要求独立真人确认。dynamic-exec 不再绕过真人确认。
+    const permissionMode = ctx.commandAuthorization?.permissionMode;
+    if (ctx.commandAuthorization && permissionMode !== "read" && permissionMode !== "confirm" && permissionMode !== "auto") {
+      return deniedResult({
+        output: "命令授权模式无效，已拒绝执行。",
+        summary: "命令授权模式无效",
+        reason: "未知 permissionMode",
+      });
+    }
+    const hasHumanConfirm = typeof ctx.commandAuthorization?.requestHumanConfirm === "function";
+    const pureRead = ctx.security?.kind === "command" && ctx.security.commandClass === "pure-read" && ctx.security.requiresHumanConfirmation === false;
+    const skippedConfirm = pureRead
+      && hasHumanConfirm
+      && (permissionMode === "read" || permissionMode === "confirm" || permissionMode === "auto");
+    const denied = skippedConfirm
+      ? null
+      : await requireCommandAuthorizationAsV2(
+        ctx,
+        {
+          toolName: "bash",
+          summary: `在 ${ctx.workspacePath} 执行：${input.command}。当前没有 OS 级沙箱；命令可能访问工作区外文件、联网或启动子进程。`,
+        },
+        "用户拒绝执行 bash",
+      );
     if (denied) return denied;
 
     // 闸 3：执行 —— 走 runArgs（program+args，不经 sh -c），杜绝路径/参数里的

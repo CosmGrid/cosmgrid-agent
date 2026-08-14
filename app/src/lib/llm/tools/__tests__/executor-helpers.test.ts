@@ -126,7 +126,7 @@ describe("executor helper coverage", () => {
     await expect(
       runSecurityPrecheck(
         toolWithSecurity({ kind: "command", commandField: "command" }),
-        { command: "ls -la" },
+        { command: "pnpm test" },
         baseCtx,
       ),
     ).resolves.toMatchObject({ security: { kind: "command" } });

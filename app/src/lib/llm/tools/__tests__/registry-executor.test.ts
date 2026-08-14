@@ -288,8 +288,14 @@ describe("executeTool — L6 声明式安全检查", () => {
         return { status: "success" as const, summary: "ok", output: "ok", artifacts: [], nextActions: [] };
       },
     };
-    const res = await executeTool(tool, { command: "ls -la" }, ctxFn());
+    const res = await executeTool(tool, { command: "pnpm test" }, ctxFn());
     expect(res.status).toBe("success");
-    expect(captured.ctx?.security).toEqual({ kind: "command", verdict: "allow", reason: "白名单命令" });
+    expect(captured.ctx?.security).toEqual({
+      kind: "command",
+      verdict: "allow",
+      reason: "动态命令，必须真人确认",
+      commandClass: "dynamic-exec",
+      requiresHumanConfirmation: true,
+    });
   });
 });

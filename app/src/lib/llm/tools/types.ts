@@ -7,6 +7,7 @@
 // Vercel AI SDK tool()。每个 tool = name + description + zod 参数 schema + execute。
 
 import type { z } from "zod";
+import type { CommandClass } from "@/lib/policy/command-program-spec";
 
 /** 工具执行上下文（工作区边界 + 关联实体） */
 export interface ToolContext {
@@ -44,7 +45,7 @@ export interface ToolContext {
   security?:
     | { kind: "read-path"; resolved: string }
     | { kind: "write-path"; resolved: string; external: boolean }
-    | { kind: "command"; verdict: "allow" | "block"; reason?: string };
+    | { kind: "command"; verdict: "allow" | "block"; reason?: string; commandClass?: CommandClass; requiresHumanConfirmation?: boolean };
 }
 
 /** 结构化追问用户时的一个候选选项 */

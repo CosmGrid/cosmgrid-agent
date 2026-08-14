@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { checkCommand, firstProgram, isReadOnlyCommand, tryParseProgramArgs } from "../command-safety";
 import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
+import { getCommandClass } from "@/lib/policy/command-program-spec";
 
 describe("firstProgram", () => {
   it("取首个程序名", () => {
@@ -16,17 +17,10 @@ describe("firstProgram", () => {
 
 describe("isReadOnlyCommand（只读免确认判定）", () => {
   it.each([
-    "git log --oneline -10",
-    "git status",
-    "git diff --stat",
-    "git show HEAD",
-    "ls -la src",
-    "cat package.json",
-    "head -20 README.md",
-    "grep -rn TODO src",
     "pwd",
-    "git log | head -5",            // 串联：两段都只读
-    "NODE_ENV=dev git log",        // 带 env 前缀
+    "echo hello",
+    "basename src/a.ts",
+    "dirname src/a.ts",
   ])("只读命令放行：%s", (cmd) => {
     expect(isReadOnlyCommand(cmd)).toBe(true);
   });
@@ -53,6 +47,54 @@ describe("isReadOnlyCommand（只读免确认判定）", () => {
   });
 });
 
+describe("P0-01C1 命令分类与严格 grammar", () => {
+  it.each(["pwd", "echo hello", "basename src/a.ts", "dirname src/a.ts"]) (
+    "简单 pure-read 允许：%s",
+    (cmd) => expect(checkCommand(cmd).verdict).toBe("allow"),
+  );
+  it.each(["git status", "bash -c 'echo ok'", "node -e '1'", "pnpm test"]) (
+    "dynamic-exec 仍进入授权流程而非 read 免确认：%s",
+    (cmd) => {
+      expect(getCommandClass(cmd.split(/\s+/, 1)[0]!)).toBe("dynamic-exec");
+      expect(isReadOnlyCommand(cmd)).toBe(false);
+      expect(checkCommand(cmd).verdict).toBe("allow");
+    },
+  );
+  it.each(["cat package.json", "cp a b", "curl https://example.com", "date"]) (
+    "path/network/unsupported 当前临时 block：%s",
+    (cmd) => expect(checkCommand(cmd).verdict).toBe("block"),
+  );
+  it.each(["pwd x", "basename", "basename -a x", "dirname a b", "echo -n hello"]) (
+    "pure-read grammar 不合规 block：%s",
+    (cmd) => expect(checkCommand(cmd).verdict).toBe("block"),
+  );
+  it("未分类 override 程序 fail closed", () => {
+    expect(checkCommand("custom-tool", [], new Set([...BUILTIN_ALLOWED_PROGRAMS, "custom-tool"])).verdict).toBe("block");
+  });
+  it("response-file 参数 fail closed", () => {
+    expect(checkCommand("pnpm @args.rsp").verdict).toBe("block");
+    expect(tryParseProgramArgs("pnpm @args.rsp")).toBeNull();
+    expect(checkCommand("gcc -Wl,@args.rsp").verdict).toBe("block");
+    expect(checkCommand("gcc --options=@args.rsp").verdict).toBe("block");
+    expect(checkCommand("gcc @args.rsp").verdict).toBe("block");
+    expect(checkCommand("javac @args.rsp").verdict).toBe("block");
+    expect(checkCommand("node @args.rsp").verdict).toBe("block");
+    expect(checkCommand("pnpm add @scope/pkg").verdict).toBe("allow");
+    expect(checkCommand("npm install @scope/pkg").verdict).toBe("allow");
+    expect(checkCommand("yarn add @scope/pkg@^1.2.3").verdict).toBe("allow");
+    expect(checkCommand("npx @scope/pkg").verdict).toBe("allow");
+    expect(checkCommand("bun add @scope/pkg").verdict).toBe("allow");
+    expect(checkCommand("pnpm add @scope").verdict).toBe("block");
+    expect(checkCommand("pnpm add @Scope/pkg").verdict).toBe("block");
+    expect(checkCommand("pnpm add @scope/pkg,@args").verdict).toBe("block");
+    expect(checkCommand("pnpm add @scope/pkg@latest,@args").verdict).toBe("block");
+    expect(checkCommand("pnpm add @scope/pkg@file:../x").verdict).toBe("block");
+    expect(checkCommand("gcc @scope/pkg").verdict).toBe("block");
+    expect(checkCommand("node @scope/pkg").verdict).toBe("block");
+    expect(checkCommand("echo user@example.com").verdict).toBe("allow");
+  });
+});
+
 // 2026-07-15 review 修复：find 在只读白名单里但只看程序名不看参数，
 // `find . -delete` / `find -exec rm {} +` 会被当"纯只读"直接跳过确认真的删文件。
 describe("find 参数能写文件 → 不再免确认（2026-07-15 review 修复）", () => {
@@ -64,8 +106,8 @@ describe("find 参数能写文件 → 不再免确认（2026-07-15 review 修复
     "find . -type f -exec rm -f {} \\;",
   ])("find 写操作变体不再判定为只读：%s", (cmd) => {
     expect(isReadOnlyCommand(cmd)).toBe(false);
-    // find 本身仍在白名单里（能跑，只是要走确认），不应该被 block
-    expect(checkCommand(cmd).verdict).toBe("allow");
+    // path-read 分类当前临时 block，待后续路径 grammar 工作包开放。
+    expect(checkCommand(cmd).verdict).toBe("block");
   });
 });
 
@@ -74,15 +116,11 @@ describe("白名单命令 → allow", () => {
     "pnpm test",
     "npm run build",
     "git status",
-    "git diff --stat",
     "node script.js",
-    "ls -la src",
-    "cat package.json",
-    "grep -rn TODO src",
+    "pwd",
     "tsc --noEmit",
     "NODE_ENV=test pnpm vitest run",
-    "git add . && git commit -m 'x'",
-    "pnpm install && pnpm test",
+    "git status",
   ])("allow: %s", (cmd) => {
     expect(checkCommand(cmd).verdict).toBe("allow");
   });
@@ -107,7 +145,7 @@ describe("环境变量读取包装器 → hard block", () => {
     const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, exactProgramToken]);
     const overrideCheck = checkCommand(cmd, [], extraAllowed);
     expect(overrideCheck.verdict).toBe("block");
-    expect(overrideCheck.reason).toContain("被安全策略禁止");
+    expect(overrideCheck.reason).toMatch(/被安全策略禁止|简单 program\+argv/);
   });
 
   it.each([
@@ -125,22 +163,22 @@ describe("环境变量读取包装器 → hard block", () => {
   ])("相似但不同的程序身份不误伤：%s", (cmd, token) => {
     const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, cmd]);
     extraAllowed.add(token);
-    expect(checkCommand(cmd, [], extraAllowed).verdict).toBe("allow");
+    expect(checkCommand(cmd, [], extraAllowed).verdict).toBe("block");
   });
 
   it("printenvironment.exe 不因包含 printenv 而误伤", () => {
     const extraAllowed = new Set([...BUILTIN_ALLOWED_PROGRAMS, "printenvironment.exe"]);
-    expect(checkCommand("printenvironment.exe", [], extraAllowed).verdict).toBe("allow");
+    expect(checkCommand("printenvironment.exe", [], extraAllowed).verdict).toBe("block");
   });
 
-  it("参数或文件名含 environment 不误伤合法命令", () => {
+  it("参数含 environment 不误伤；cat 属 path-read 当前阻断", () => {
     expect(checkCommand("echo environment").verdict).toBe("allow");
-    expect(checkCommand("cat environment.txt").verdict).toBe("allow");
+    expect(checkCommand("cat environment.txt").verdict).toBe("block");
   });
 });
 
 describe("关键命令回归", () => {
-  it.each(["pnpm test", "git status", "node -e \"console.log(1)\"", "curl https://example.com"])(
+  it.each(["pnpm test", "git status", "node -e \"console.log(1)\""])(
     "仍 allow：%s",
     (cmd) => expect(checkCommand(cmd).verdict).toBe("allow"),
   );
@@ -193,7 +231,7 @@ describe("git push 绕过尝试 → block（2026-07-15 review 修复）", () => 
   });
 });
 
-// 2026-07-16 全 parity 档：远程访问 / 进程控制 / 系统守护 / 任意本地可执行文件仍默认拒绝。
+// 未分类的远程访问 / 进程控制 / 系统守护 / 任意本地可执行文件仍默认拒绝。
 // 这些不属于"读项目/改项目/写代码/做插件"的开发主循环，保守起见留在白名单外（需要时走项目级 override 追加）。
 describe("非白名单程序 → block（默认拒绝）", () => {
   it.each([
@@ -211,9 +249,8 @@ describe("非白名单程序 → block（默认拒绝）", () => {
   });
 });
 
-// 2026-07-16 全 parity 档：补齐主流开发工具链 + shell 解释器 + 网络抓取，
-// 让 AI 能像 Claude Code 一样跑任意语言项目的构建/测试/打包。
-describe("全 parity 档：开发工具链 + shell + 网络抓取 → allow（2026-07-16）", () => {
+// 已分类候选程序仍需按 command class 决策；dynamic-exec allow 后必须真人确认。
+describe("已分类 dynamic-exec 候选 → allow（后续需真人确认）", () => {
   it.each([
     "make", "make build", "cmake --build .", "ninja",
     "gcc -o app main.c", "g++ -std=c++20 a.cpp", "clang -O2 x.c", "cc x.c", "rustc main.rs",
@@ -223,8 +260,7 @@ describe("全 parity 档：开发工具链 + shell + 网络抓取 → allow（20
     "docker build -t x .", "docker compose up", "docker-compose up", "podman ps", "kubectl get pods",
     "pytest -q", "ruff check .", "mypy .", "black .", "poetry install", "uv pip install x", "pyright",
     "bash build.sh", "sh setup.sh", "zsh run.zsh",
-    "curl -O https://example.com/file.tgz", "wget https://example.com/x.tar.gz",
-    "tar -xzf x.tgz", "unzip x.zip", "zip -r out.zip dir",
+    "git status", "node script.js",
   ])("allow: %s", (cmd) => {
     expect(checkCommand(cmd).verdict).toBe("allow");
   });
@@ -284,8 +320,7 @@ describe("边界", () => {
   });
 });
 
-// 2026-07-04 修复（坑.md 2.3 技术债）：逐段切分从裸正则 split 换成 shell-quote 真 token 化。
-// 这组测试专门锁定"引号内的 shell 元字符不该被当成真操作符"这个此前存在的误判场景。
+// 引号内的 shell 元字符应保留为普通 argv；真正的组合命令仍统一阻断。
 describe("引号内的 shell 元字符不应被误判为分段操作符（2026-07-04 修复）", () => {
   it.each([
     "git commit -m \"fix: handle && in strings\"",
@@ -294,13 +329,13 @@ describe("引号内的 shell 元字符不应被误判为分段操作符（2026-0
     "echo \"a ; b\"",
     "echo \"a | b\"",
     "git commit -m 'contains && and | chars'",
-  ])("引号内含 shell 元字符的合法命令仍应 allow：%s", (cmd) => {
+  ])("引号内含 shell 元字符的简单命令按 argv 解析：%s", (cmd) => {
     expect(checkCommand(cmd).verdict).toBe("allow");
   });
 
-  it("真正的 && 串联仍然逐段检查白名单（未被引号掩盖时行为不变）", () => {
+  it("真正的 && 串联统一阻断", () => {
     expect(checkCommand("git status && rm -rf /").verdict).toBe("block");
-    expect(checkCommand("git status && echo done").verdict).toBe("allow");
+    expect(checkCommand("git status && echo done").verdict).toBe("block");
   });
 
   it("引号内的 > 不应被当成真实重定向——只读判定不受影响", () => {
