@@ -90,7 +90,7 @@
       "auto": "Auto",
       "readHint": "Read-only: AI can read files, search, and view git — it changes nothing",
       "confirmHint": "Confirm writes: read-only actions (viewing files, git log, etc.) run freely; only changes like writing files or installing deps ask you to confirm or cancel, with steps shown in the chat",
-      "autoHint": "Auto: AI writes files / runs commands without per-action prompts (use for trusted work)"
+      "autoHint": "Auto: file writes run automatically; non-read-only commands still require confirmation"
     },
     "tools": {
       "confirmTitle": "AI requests a write or command — confirm first",

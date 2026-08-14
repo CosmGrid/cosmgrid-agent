@@ -20,6 +20,11 @@ export interface ToolContext {
   messageId?: string;
   /** 写操作的用户确认回调；返回 false 表示用户拒绝 */
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
+  /** 命令执行专用的人类授权通道；故意与文件写入 confirm 分离，auto 也不能静默放行命令。 */
+  commandAuthorization?: {
+    permissionMode: "read" | "confirm" | "auto";
+    requestHumanConfirm?: (request: ToolConfirmRequest) => Promise<boolean>;
+  };
   /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
   blockedCommands?: string[];
   /** K7 能力门控：本轮允许的 capability 集（允许集）。来源 = 当前工作流阶段策略

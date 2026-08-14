@@ -13,6 +13,7 @@ import { retrieveCrossProjectMemoriesForPrompt } from "@/lib/memory/retrieval";
 import { formatLocalMcpLaunch } from "@/lib/mcp/session-scope";
 import cosmgridLogo from "@/assets/cosmgrid-logo.svg";
 import { cn } from "@/lib/utils";
+import { createStageChatConfirmationController } from "./stage-chat-confirmation";
 
 const ChatBubble = memo(function ChatBubble({
   role,
@@ -74,35 +75,35 @@ export function StageChat({ stage, model, credential, apiKey, conversationId, fa
   const [streamErr, setStreamErr] = useState<string | null>(null);
   const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
-  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+  const confirmQueueRef = useRef<ReturnType<typeof createStageChatConfirmationController> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  function requestConfirm(req: ToolConfirmRequest): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      setPendingConfirm(req);
-      confirmResolverRef.current = resolve;
-    });
+  if (!confirmQueueRef.current) {
+    confirmQueueRef.current = createStageChatConfirmationController(setPendingConfirm);
   }
+  const confirmQueue = confirmQueueRef.current;
 
   function resolveConfirm(ok: boolean) {
-    confirmResolverRef.current?.(ok);
-    confirmResolverRef.current = null;
-    setPendingConfirm(null);
+    confirmQueue.resolveCurrent(ok);
   }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [history]);
 
-  async function loadHistory() {
-    const list = await dbMessages.listByConversation(conversationId);
-    setHistory(list);
-  }
-
   useEffect(() => {
-    void loadHistory();
-  }, [conversationId]);
+    let cancelled = false;
+    void dbMessages.listByConversation(conversationId).then((list) => {
+      if (!cancelled) setHistory(list);
+    });
+    return () => {
+      cancelled = true;
+      confirmQueue.invalidate();
+      abortRef.current?.abort();
+      setStreaming(false);
+    };
+  }, [conversationId, confirmQueue]);
 
   async function handleSend() {
     const text = draft.trim();
@@ -112,25 +113,26 @@ export function StageChat({ stage, model, credential, apiKey, conversationId, fa
     setSwitchNotice(null);
     setStreaming(true);
 
-    const userMsg = await dbMessages.create({ conversationId, role: "user", content: text });
-    const assistantId = crypto.randomUUID();
-    setHistory((prev) => [
-      ...prev,
-      userMsg,
-      { id: assistantId, conversationId, role: "assistant", content: "", modelId: stage.modelId, inputTokens: 0, outputTokens: 0, cost: 0, createdAt: new Date().toISOString() },
-    ]);
-
     const controller = new AbortController();
     abortRef.current = controller;
+    const turn = confirmQueue.beginTurn(controller.signal);
 
-    let primary;
     try {
-      primary = toModelEndpoint(model, credential, apiKey);
-    } catch (err) {
-      setStreamErr(err instanceof Error ? err.message : t("projectDetail.chat.endpointFailed"));
-      setStreaming(false);
-      return;
-    }
+      const userMsg = await dbMessages.create({ conversationId, role: "user", content: text });
+      const assistantId = crypto.randomUUID();
+      setHistory((prev) => [
+        ...prev,
+        userMsg,
+        { id: assistantId, conversationId, role: "assistant", content: "", modelId: stage.modelId, inputTokens: 0, outputTokens: 0, cost: 0, createdAt: new Date().toISOString() },
+      ]);
+
+      let primary;
+      try {
+        primary = toModelEndpoint(model, credential, apiKey);
+      } catch (err) {
+        setStreamErr(err instanceof Error ? err.message : t("projectDetail.chat.endpointFailed"));
+        return;
+      }
 
     const chain = fallback ? [primary, toModelEndpoint(fallback.model, fallback.credential, fallback.apiKey)] : [primary];
     let tools: WorkspaceToolRuntime["tools"];
@@ -149,8 +151,12 @@ export function StageChat({ stage, model, credential, apiKey, conversationId, fa
           includeWrite: true,
           projectId: stage.projectId,
           conversationId,
-          confirm: requestConfirm,
-          approveMcpLaunch: (server, workspacePath) => requestConfirm({
+          confirm: turn.requestConfirm,
+          commandAuthorization: {
+            permissionMode: "confirm",
+            requestHumanConfirm: turn.requestConfirm,
+          },
+          approveMcpLaunch: (server, workspacePath) => turn.requestConfirm({
             toolName: `mcp-server:${server.name}`,
             summary: `允许启动本地 MCP server？\n${formatLocalMcpLaunch(server, workspacePath)}`,
           }),
@@ -205,9 +211,13 @@ export function StageChat({ stage, model, credential, apiKey, conversationId, fa
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setStreamErr(classifyLlmError(err, t).userMessage);
+    }
     } finally {
-      setStreaming(false);
-      abortRef.current = null;
+      turn.finish();
+      if (abortRef.current === controller) {
+        setStreaming(false);
+        abortRef.current = null;
+      }
     }
   }
 
@@ -289,7 +299,7 @@ export function StageChat({ stage, model, credential, apiKey, conversationId, fa
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), void handleSend())}
           />
           {streaming ? (
-            <Button size="icon" variant="destructive" onClick={() => abortRef.current?.abort()} className="h-10 w-10 rounded-xl">
+            <Button size="icon" variant="destructive" onClick={() => { confirmQueue.invalidate(); abortRef.current?.abort(); }} className="h-10 w-10 rounded-xl">
               <Square className="w-4 h-4 fill-current" />
             </Button>
           ) : (

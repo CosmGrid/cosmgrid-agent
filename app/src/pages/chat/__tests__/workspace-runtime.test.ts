@@ -168,6 +168,29 @@ describe("prepareChatWorkspaceRuntime", () => {
     expect(requestConfirm).not.toHaveBeenCalled();
   });
 
+  it("auto 档位：命令授权始终绑定真人确认，不能复用自动写入确认", async () => {
+    const requestConfirm = vi.fn(async () => true);
+
+    await prepareChatWorkspaceRuntime({
+      workspacePath: "/tmp/project",
+      primaryIsCli: false,
+      includeWriteTools: true,
+      conversationId: "conv-1",
+      assistantId: "assistant-1",
+      permissionMode: "auto",
+      requestConfirm,
+      requestAskUser: vi.fn(),
+      getDesktopPath: async () => null,
+      stopIfAborted: () => false,
+    });
+
+    const passedArgs = mocks.prepareWorkspaceToolRuntime.mock.calls[0][0];
+    expect(passedArgs.commandAuthorization.permissionMode).toBe("auto");
+    expect(passedArgs.commandAuthorization.requestHumanConfirm).not.toBe(passedArgs.confirm);
+    await passedArgs.commandAuthorization.requestHumanConfirm({ toolName: "bash", summary: "pnpm test" });
+    expect(requestConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it("Stop 后旧轮才请求 confirm 时直接拒绝，auto 档也不得继续旧写入", async () => {
     let stopped = false;
     const requestConfirm = vi.fn(async () => true);
