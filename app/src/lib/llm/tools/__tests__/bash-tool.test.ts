@@ -173,15 +173,15 @@ describe("bash 工具 — 安全闸", () => {
     expect(request.summary).toContain("没有 OS 级沙箱");
   });
 
-  it("pure-read pwd 在 read 模式有 guarded callback 时免弹窗执行", async () => {
+  it("pure-read pwd 在 read 模式即使有 callback 也拒绝且不执行", async () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pwd" }, {
       ...ctx(undefined, undefined, false),
       commandAuthorization: { permissionMode: "read", requestHumanConfirm },
     });
-    expect(r.status).toBe("success");
+    expect(r.status).toBe("denied");
     expect(requestHumanConfirm).not.toHaveBeenCalled();
-    expect(runArgsSpy).toHaveBeenCalledWith(["pwd"], "/ws");
+    expect(runArgsSpy).not.toHaveBeenCalled();
   });
 
   it("pure-read 缺少 commandAuthorization 仍 fail closed", async () => {
@@ -202,7 +202,7 @@ describe("bash 工具 — 安全闸", () => {
   });
 
   it.each([["confirm", "pwd"], ["auto", "echo hello"]] as const)(
-    'pure-read 命令 confirm/auto 有完整授权对象时成功且不回调：%s %s',
+    'pure-read 命令 confirm/auto 必须调用一次专用真人确认：%s %s',
     async (permissionMode, command) => {
       const requestHumanConfirm = vi.fn().mockResolvedValue(true);
       const r = await executeTool(bashTool, { command }, {
@@ -210,7 +210,7 @@ describe("bash 工具 — 安全闸", () => {
         commandAuthorization: { permissionMode, requestHumanConfirm },
       });
       expect(r.status).toBe("success");
-      expect(requestHumanConfirm).not.toHaveBeenCalled();
+      expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
       expect(runArgsSpy).toHaveBeenCalledWith(command === "pwd" ? ["pwd"] : ["echo", "hello"], "/ws");
     },
   );
@@ -226,6 +226,31 @@ describe("bash 工具 — 安全闸", () => {
       expect(runArgsSpy).not.toHaveBeenCalled();
     },
   );
+
+  it.each([false, "true", 1, { approved: true }] as const)(
+    "pure-read 真人确认不是严格 boolean true 时拒绝且不执行：%s",
+    async (answer) => {
+      const requestHumanConfirm = vi.fn().mockResolvedValue(answer as never);
+      const r = await executeTool(bashTool, { command: "pwd" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+      });
+      expect(r.status).toBe("denied");
+      expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
+      expect(runArgsSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("pure-read 真人确认抛错时 callback 只调用一次、拒绝且不执行", async () => {
+    const requestHumanConfirm = vi.fn().mockRejectedValue(new Error("dialog closed"));
+    const r = await executeTool(bashTool, { command: "pwd" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
 
   it.each(["git status", "pwd"])("非法 permissionMode fail closed：%s", async (command) => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
@@ -342,21 +367,15 @@ describe("bash 工具 — 执行", () => {
     expect(r.output).toContain("exit code: 0");
   });
 
-  // 2026-07-15 review 修复回归测试：userConfirmed 必须反映"是不是真的弹过确认框"，
-  // 不能靠 status/tool.readOnly 反推——bash 工具整体 readOnly=false，但只读命令
-  // （git status 这类）会跳过 requireApprovalAsV2，旧的反推逻辑会把这种"系统免确认"
-  // 误记成"用户确认过"。
-  it("只读命令免确认执行 → userConfirmed 应为 false（系统判定安全免确认，不是用户点了同意），且落库的审计记录也如实记这个 false", async () => {
+  it("pure-read 命令真人确认执行 → userConfirmed 应为 true，且落库审计记录也如实记这个 true", async () => {
     dbMocks.create.mockClear();
-    const confirm = vi.fn();
+    const confirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pwd" }, ctx(confirm));
     expect(r.status).toBe("success");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(r.userConfirmed).toBe(false);
-    // 真正的 bug 点在这里：persistToolExecution 落库前不能靠 status/tool.readOnly 反推，
-    // 必须原样透传工具自己报的 userConfirmed，不能被"bash 整体 readOnly=false"污染成 true。
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(r.userConfirmed).toBe(true);
     expect(dbMocks.create).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "bash", userConfirmed: false }),
+      expect.objectContaining({ toolName: "bash", userConfirmed: true }),
     );
   });
 

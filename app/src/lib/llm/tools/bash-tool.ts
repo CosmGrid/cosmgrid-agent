@@ -60,8 +60,8 @@ export const bashTool: ToolDefinition<BashParams> = {
       });
     }
 
-    // P0-01C1：只有纯只读 grammar 在 read/confirm/auto 都可放行；所有命令安全边界
-    // 均要求独立真人确认。dynamic-exec 不再绕过真人确认。
+    // P0-01C2a1：pure-read 仍保留分类和严格 grammar，但 PATH 查找可能被同名程序冒充，
+    // 因此不再 skippedConfirm。read 模式拒绝，confirm/auto 必须由专用真人 callback 严格 true 才能执行。
     const permissionMode = ctx.commandAuthorization?.permissionMode;
     if (ctx.commandAuthorization && permissionMode !== "read" && permissionMode !== "confirm" && permissionMode !== "auto") {
       return deniedResult({
@@ -70,21 +70,14 @@ export const bashTool: ToolDefinition<BashParams> = {
         reason: "未知 permissionMode",
       });
     }
-    const hasHumanConfirm = typeof ctx.commandAuthorization?.requestHumanConfirm === "function";
-    const pureRead = ctx.security?.kind === "command" && ctx.security.commandClass === "pure-read" && ctx.security.requiresHumanConfirmation === false;
-    const skippedConfirm = pureRead
-      && hasHumanConfirm
-      && (permissionMode === "read" || permissionMode === "confirm" || permissionMode === "auto");
-    const denied = skippedConfirm
-      ? null
-      : await requireCommandAuthorizationAsV2(
-        ctx,
-        {
-          toolName: "bash",
-          summary: `在 ${ctx.workspacePath} 执行：${input.command}。当前没有 OS 级沙箱；命令可能访问工作区外文件、联网或启动子进程。`,
-        },
-        "用户拒绝执行 bash",
-      );
+    const denied = await requireCommandAuthorizationAsV2(
+      ctx,
+      {
+        toolName: "bash",
+        summary: `在 ${ctx.workspacePath} 执行：${input.command}。当前没有 OS 级沙箱；命令可能访问工作区外文件、联网或启动子进程。`,
+      },
+      "用户拒绝执行 bash",
+    );
     if (denied) return denied;
 
     // 闸 3：执行 —— 走 runArgs（program+args，不经 sh -c），杜绝路径/参数里的
@@ -122,7 +115,7 @@ export const bashTool: ToolDefinition<BashParams> = {
                 ]
               : [],
           }),
-          userConfirmed: !skippedConfirm,
+          userConfirmed: true,
         };
       }
 
@@ -138,17 +131,13 @@ export const bashTool: ToolDefinition<BashParams> = {
             rootCauseHint: stderr
               ? `命令退出码 ${res.code}，stderr 摘录：${stderr.slice(0, 200)}`
               : `命令退出码 ${res.code}`,
-            retryable: skippedConfirm,
-            retryInstruction: skippedConfirm
-              ? "只读命令可以再试一次，失败原因可能跟文件状态/网络抖动有关"
-              : "写命令失败不建议立即重试，先看 stderr 修复根本原因（权限 / 路径 / 资源）",
-            stopCondition: skippedConfirm
-              ? undefined
-              : "连续失败 2 次后停止重试，必须先看 stderr 修根因",
+            retryable: false,
+            retryInstruction: "命令失败不建议立即重试，先看 stderr 修复根本原因（权限 / 路径 / 资源）",
+            stopCondition: "连续失败 2 次后停止重试，必须先看 stderr 修根因",
           },
           artifacts,
         }),
-        userConfirmed: !skippedConfirm,
+        userConfirmed: true,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -163,7 +152,7 @@ export const bashTool: ToolDefinition<BashParams> = {
             stopCondition: "shell adapter 抛错通常是进程层失败（如超时/资源耗尽），先排查环境",
           },
         }),
-        userConfirmed: !skippedConfirm,
+        userConfirmed: true,
       };
     }
   },
