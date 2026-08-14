@@ -125,6 +125,21 @@ describe("bash 工具 — 安全闸", () => {
     expect(r.status).toBe("denied");
   });
 
+  it("PolicyStore 未分类 override 仍由 executor 链路 fail closed", async () => {
+    policyStoreMocks.get.mockImplementation(async (_key: string, scope: { level: string }) => (
+      scope.level === "global" ? JSON.stringify(["custom-tool"]) : null
+    ));
+    invalidateAllowlistResolveCache();
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "custom-tool" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
   it("无确认通道 → 拒绝，不执行", async () => {
     const r = await executeTool(bashTool, { command: "pnpm test" }, ctx());
     expect(r.status).toBe("denied");
@@ -138,13 +153,44 @@ describe("bash 工具 — 安全闸", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 
-  it.each(["git status", "ls"])('只读命令缺 commandAuthorization 也拒绝且不执行：%s', async (command) => {
+  it.each(["git status", "pnpm test"])('dynamic 命令缺 commandAuthorization 也拒绝且不执行：%s', async (command) => {
     const r = await executeTool(bashTool, { command }, ctx());
     expect(r.status).toBe("denied");
     expect(runArgsSpy).not.toHaveBeenCalled();
   });
 
-  it.each(["git status", "ls"])('只读命令 read 档即使有 callback 也拒绝且不回调：%s', async (command) => {
+  it("git status 在 auto 也调用一次专用真人确认，并显示 cwd 与无 OS 沙箱提示", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "git status" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "auto", requestHumanConfirm },
+    });
+    expect(r.status).toBe("success");
+    expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
+    const request = requestHumanConfirm.mock.calls[0]![0];
+    expect(request.summary).toContain("git status");
+    expect(request.summary).toContain("/ws");
+    expect(request.summary).toContain("没有 OS 级沙箱");
+  });
+
+  it("pure-read pwd 在 read 模式有 guarded callback 时免弹窗执行", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command: "pwd" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm },
+    });
+    expect(r.status).toBe("success");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).toHaveBeenCalledWith(["pwd"], "/ws");
+  });
+
+  it("pure-read 缺少 commandAuthorization 仍 fail closed", async () => {
+    const r = await executeTool(bashTool, { command: "pwd" }, ctx(undefined, undefined, false));
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["git status", "pnpm test"])('dynamic 命令 read 档即使有 callback 也拒绝且不回调：%s', async (command) => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command }, {
       ...ctx(undefined, undefined, false),
@@ -155,8 +201,8 @@ describe("bash 工具 — 安全闸", () => {
     expect(runArgsSpy).not.toHaveBeenCalled();
   });
 
-  it.each([["confirm", "git status"], ["auto", "ls"]] as const)(
-    '只读命令 confirm/auto 有完整授权对象时成功且不回调：%s %s',
+  it.each([["confirm", "pwd"], ["auto", "echo hello"]] as const)(
+    'pure-read 命令 confirm/auto 有完整授权对象时成功且不回调：%s %s',
     async (permissionMode, command) => {
       const requestHumanConfirm = vi.fn().mockResolvedValue(true);
       const r = await executeTool(bashTool, { command }, {
@@ -165,9 +211,35 @@ describe("bash 工具 — 安全闸", () => {
       });
       expect(r.status).toBe("success");
       expect(requestHumanConfirm).not.toHaveBeenCalled();
-      expect(runArgsSpy).toHaveBeenCalledWith(command === "git status" ? ["git", "status"] : ["ls"], "/ws");
+      expect(runArgsSpy).toHaveBeenCalledWith(command === "pwd" ? ["pwd"] : ["echo", "hello"], "/ws");
     },
   );
+
+  it.each(["read", "confirm", "auto"] as const)(
+    "pure-read %s 模式缺少 callback 仍 fail closed",
+    async (permissionMode) => {
+      const r = await executeTool(bashTool, { command: "pwd" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode },
+      });
+      expect(r.status).toBe("denied");
+      expect(runArgsSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["git status", "pwd"])("非法 permissionMode fail closed：%s", async (command) => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode: "invalid" as never,
+        requestHumanConfirm,
+      },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
 
   it.each(["confirm", "auto"] as const)(
     '只读命令授权对象缺 callback 时拒绝且不执行：%s',
@@ -183,7 +255,7 @@ describe("bash 工具 — 安全闸", () => {
 });
 
 describe("bash 工具 — 执行", () => {
-  it.each(["pnpm test", "node -e 'console.log(1)'", "bash -c 'echo ok'", "curl https://example.com"])(
+  it.each(["pnpm test", "node -e 'console.log(1)'", "bash -c 'echo ok'"])(
     "confirm 命令走独立真人确认：%s",
     async (command) => {
       const requestHumanConfirm = vi.fn().mockResolvedValue(true);
@@ -238,6 +310,16 @@ describe("bash 工具 — 执行", () => {
     expect(runArgsSpy).not.toHaveBeenCalled();
   });
 
+  it.each(["yes", { approved: true }] as const)("真人确认 callback 非 boolean true 时 fail closed：%s", async (answer) => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(answer as never);
+    const r = await executeTool(bashTool, { command: "pnpm test" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+    });
+    expect(r.status).toBe("denied");
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
   it("read 权限档即使存在 callback 也拒绝命令", async () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pnpm test" }, {
@@ -267,7 +349,7 @@ describe("bash 工具 — 执行", () => {
   it("只读命令免确认执行 → userConfirmed 应为 false（系统判定安全免确认，不是用户点了同意），且落库的审计记录也如实记这个 false", async () => {
     dbMocks.create.mockClear();
     const confirm = vi.fn();
-    const r = await executeTool(bashTool, { command: "git status" }, ctx(confirm));
+    const r = await executeTool(bashTool, { command: "pwd" }, ctx(confirm));
     expect(r.status).toBe("success");
     expect(confirm).not.toHaveBeenCalled();
     expect(r.userConfirmed).toBe(false);

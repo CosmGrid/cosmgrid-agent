@@ -2,26 +2,25 @@
 //
 // 这是整个产品最危险的入口：AI 想跑命令。三道闸：
 //   1. 危险模式黑名单（rm -rf / sudo / chmod 777 / 重定向覆盖 / curl|sh 等）→ 直接 block
-//   2. 程序白名单（pnpm/npm/yarn/node/git/ls/cat 等只读或开发命令）→ allow（仍需用户确认）
+//   2. 命令分类与 grammar：仅严格 pure-read grammar 可 allow；dynamic-exec 仍需真人确认
 //   3. 不在白名单 → block（默认拒绝，宁可少跑也不误伤）
 //
 // 纯函数、可红队测试。execute 时即便 allow 也强制走用户确认（双保险）。
 //
-// 2026-07-04 修复（技术债，坑.md 2.3）：逐段切分复合命令(; && || |)以前是裸正则
-// split(/&&|\|\||;|\|/)，不理解引号——`git commit -m "a && b"` 这类合法命令里，引号内的
-// "&&" 会被错误当成真操作符切开，导致误判（把 `b"` 当成一个新程序名，白名单查不到就
-// 误 block）。改用 `shell-quote` 做真正的 token 化：字符串/操作符分开产出，引号内容原样
-// 保留为一个 token，不会被内部的 shell 元字符污染分段结果。
+// shell-quote 仅用于识别 token 与危险操作符；组合命令不会被拆开执行，而是统一 block。
 
 import { parse as parseShellCommand } from "shell-quote";
 import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 import { DANGEROUS_COMMAND_PATTERNS } from "@/lib/security-invariants/dangerous-command-patterns";
+import { getCommandClass, isKnownCommandProgram, type CommandClass } from "@/lib/policy/command-program-spec";
 
 export type CommandVerdict = "allow" | "block";
 
 export interface CommandCheck {
   verdict: CommandVerdict;
   reason: string;
+  commandClass?: CommandClass;
+  requiresHumanConfirmation?: boolean;
 }
 
 type ShellToken = string | { op: string; pattern?: string };
@@ -81,6 +80,26 @@ function isHardDeniedProgram(program: string): boolean {
   return HARD_DENIED_PROGRAMS.has(identity);
 }
 
+function pureReadGrammar(program: string, args: string[]): boolean {
+  if (program === "pwd") return args.length === 0;
+  if (program === "basename" || program === "dirname") {
+    return args.length === 1 && !args[0]!.startsWith("-");
+  }
+  if (program === "echo") {
+    // Minimal grammar: echo accepts values only; flags are intentionally not interpreted.
+    return args.every((arg) => !arg.startsWith("-"));
+  }
+  return false;
+}
+
+const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "npx", "bun"]);
+const SCOPED_PACKAGE_TOKEN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*(?:@[A-Za-z0-9._*+^~<>=|-]+)?$/;
+
+function isResponseFileToken(program: string, arg: string): boolean {
+  if (PACKAGE_MANAGERS.has(program) && SCOPED_PACKAGE_TOKEN.test(arg)) return false;
+  return /(?:^|[=,])@/.test(arg);
+}
+
 /** 命令是否含真正的重定向操作符（> >>），不是引号内字符串里出现的 ">"。 */
 function hasRedirectOperator(cmd: string): boolean {
   let tokens: ShellToken[];
@@ -127,6 +146,7 @@ export function tryParseProgramArgs(command: string): { program: string; args: s
   if (rest.length === 0) return null;
   const [program, ...args] = rest;
   if (!program) return null;
+  if (args.some((arg) => isResponseFileToken(program, arg))) return null;
   return { program, args };
 }
 
@@ -156,7 +176,9 @@ function isGitPushCommand(cmd: string): boolean {
 
 /**
  * 分类一条命令。block 优先于 allow。
- * 注意：含 shell 串联（; && || | ` $()）时，逐段都要过白名单，任一段不允许即 block。
+ * 仅接受单一 program+argv；组合、重定向、glob、response-file 和解析失败一律 block。
+ * 只有 pwd/echo/basename/dirname 的严格 pure-read grammar 可免弹窗；dynamic-exec 需真人确认，
+ * 其余分类等待 C2-C4 grammar 工作包开放。
  *
  * 引擎化改造方案阶段 1a：第三参数 `extraAllowed` 接 PolicyStore 已解析的允许程序集合。
  * 默认值仍是 builtin（BUILTIN_ALLOWED_PROGRAMS，含 pip3 等）；调用方按需用
@@ -192,49 +214,35 @@ export function checkCommand(
     return { verdict: "block", reason: "危险命令：git push 推远端（需人工，禁止自动）" };
   }
 
+  // Only a single program+argv is accepted. The executor never falls back to sh -c.
+  const parsed = tryParseProgramArgs(cmd);
+  if (!parsed) return { verdict: "block", reason: "仅允许简单 program+argv，组合/重定向/glob/解析失败均拒绝" };
+
   // 命令替换 $() / 反引号 → 无法静态判断内部，保守 block
   if (/\$\(|`/.test(cmd)) {
     return { verdict: "block", reason: "含命令替换 $() / 反引号，无法静态审查" };
   }
 
-  // 逐段（; && || |）检查白名单——用 shell-quote 真正 token 化，引号内的 && 等字符不会被误判成分段点
-  const segments = tokenizeSegments(cmd);
-  for (const seg of segments) {
-    const prog = firstProgramFromTokens(seg);
-    if (isHardDeniedProgram(prog)) {
-      return { verdict: "block", reason: `程序 "${prog}" 被安全策略禁止` };
-    }
-    if (!extraAllowed.has(prog)) {
-      return { verdict: "block", reason: `程序 "${prog || seg.join(" ")}" 不在白名单` };
-    }
+  const prog = parsed.program;
+  if (isHardDeniedProgram(prog)) {
+    return { verdict: "block", reason: `程序 "${prog}" 被安全策略禁止` };
   }
-
-  return { verdict: "allow", reason: "白名单命令" };
+  // Overrides can add names to the allowlist, but cannot create an unclassified
+  // execution path. A new program must first be classified in the canonical registry.
+  if (!isKnownCommandProgram(prog) || !extraAllowed.has(prog)) {
+    return { verdict: "block", reason: `程序 "${prog}" 未分类或不在白名单` };
+  }
+  const commandClass = getCommandClass(prog) as CommandClass;
+  if (commandClass === "dynamic-exec") return { verdict: "allow", reason: "动态命令，必须真人确认", commandClass, requiresHumanConfirmation: true };
+  if (commandClass === "pure-read" && pureReadGrammar(prog, parsed.args)) {
+    return { verdict: "allow", reason: "纯只读 grammar 命令", commandClass, requiresHumanConfirmation: false };
+  }
+  return { verdict: "block", reason: `${commandClass} 命令当前未开放 grammar`, commandClass, requiresHumanConfirmation: true };
 }
 
-// 100% 只读的程序（只看不改，跑了不产生副作用）
-const READONLY_PROGRAMS = new Set([
-  "ls", "cat", "head", "tail", "wc", "pwd", "echo", "grep", "rg",
-  // 只看不改的 shell 工具（cd 只切目录、其余纯输出）→ 免确认。
-  // sed/awk/mkdir/touch/cp/mv/jq 能写文件，不在此列（仍走确认）。
-  // 2026-07-15 review 修复：find 也从这里移除——isReadOnlyCommand 只看程序名不看参数，
-  // `find . -delete` / `find /path -exec rm {} +` 会被当"纯只读"直接跳过确认，
-  // 真的删文件/跑任意程序。find 本身能写，跟 sed/awk 这批一样应该走确认。
-  "cd", "which", "type", "date",
-  "sort", "uniq", "cut", "tr", "column", "comm", "paste", "seq", "nl",
-  "diff", "cmp", "file", "stat", "tree", "du", "basename", "dirname", "realpath", "readlink",
-]);
-
-// git 的只读子命令（其余 add/commit/checkout/reset/push/pull/merge/stash/clean 等都算写）
-const GIT_READONLY_SUBCOMMANDS = new Set([
-  "log", "status", "diff", "show", "branch", "remote", "ls-files", "rev-parse",
-  "describe", "blame", "shortlog",
-]);
-
 /**
- * 命令是否「纯只读」——只看不改、跑了没副作用，可免用户确认。
- * 保守：含命令替换 $()/反引号一律当非只读；逐段都必须只读才算只读。
- * git 看子命令（log/status/diff 只读，commit/add/checkout 算写）。
+ * 兼容包装：只有 pwd/echo/basename/dirname 的严格 pure-read grammar 返回 true。
+ * 组合、重定向、glob、response-file、dynamic-exec 及其他分类均返回 false。
  */
 export function isReadOnlyCommand(command: string): boolean {
   const cmd = command.trim();
@@ -244,20 +252,15 @@ export function isReadOnlyCommand(command: string): boolean {
   // 后者会把 `echo "a > b"` 这种引号内的 ">" 也误判成重定向，导致只读命令被错误要求确认。
   if (hasRedirectOperator(cmd)) return false;
 
-  const segments = tokenizeSegments(cmd);
-  if (segments.length === 0) return false;
+  return isPureReadCommand(command);
+}
 
-  return segments.every((tokens) => {
-    const stripped = tokens.slice();
-    let i = 0;
-    while (i < stripped.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(stripped[i]!)) i++;
-    const rest = stripped.slice(i);
-    const prog = rest[0] ?? "";
-    if (READONLY_PROGRAMS.has(prog)) return true;
-    if (prog === "git") {
-      const sub = rest.slice(1).find((tk) => tk && !tk.startsWith("-"));
-      return sub ? GIT_READONLY_SUBCOMMANDS.has(sub) : false;
-    }
-    return false;
-  });
+/** Compatibility/test helper; production authorization uses structured executor precheck data. */
+export function isPureReadCommand(command: string): boolean {
+  const cmd = command.trim();
+  if (!cmd || /\$\(|`/.test(cmd) || hasRedirectOperator(cmd)) return false;
+  const parsed = tryParseProgramArgs(cmd);
+  if (!parsed || !isKnownCommandProgram(parsed.program)) return false;
+  if (parsed.args.some((arg) => isResponseFileToken(parsed.program, arg))) return false;
+  return getCommandClass(parsed.program) === "pure-read" && pureReadGrammar(parsed.program, parsed.args);
 }

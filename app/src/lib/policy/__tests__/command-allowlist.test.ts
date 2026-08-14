@@ -10,6 +10,7 @@ import {
   resolveAllowedPrograms,
   serializeAllowedProgramsOverride,
 } from "@/lib/policy/command-allowlist";
+import { COMMAND_PROGRAM_SPECS } from "@/lib/policy/command-program-spec";
 import { PolicyStore } from "@/lib/policy/policy-store";
 
 // ---------- 测试用假 PolicyStore（不依赖真 DB） ----------
@@ -69,6 +70,10 @@ function makeFakeStore() {
 }
 
 describe("policy/command-allowlist", () => {
+  it("builtin 与唯一命令分类事实源双向完全一致", () => {
+    expect([...BUILTIN_ALLOWED_PROGRAMS].sort()).toEqual(Object.keys(COMMAND_PROGRAM_SPECS).sort());
+    expect(new Set(Object.keys(COMMAND_PROGRAM_SPECS)).size).toBe(Object.keys(COMMAND_PROGRAM_SPECS).length);
+  });
   describe("BUILTIN_ALLOWED_PROGRAMS", () => {
     it("是 frozen Set（防止 builtin 被运行时偷改）", () => {
       expect(Object.isFrozen(BUILTIN_ALLOWED_PROGRAMS)).toBe(true);
@@ -96,8 +101,7 @@ describe("policy/command-allowlist", () => {
       expect(BUILTIN_ALLOWED_PROGRAMS.has("printenv")).toBe(false);
     });
 
-    // 2026-07-16 全 parity 档：开发工具链 + shell + 网络抓取进白名单，危险用法仍由黑名单挡。
-    it("内置含全 parity 档补的开发工具链 / shell / 网络抓取", () => {
+    it("内置包含已分类的开发工具链 / shell / 网络程序候选", () => {
       for (const p of ["make", "docker", "gcc", "java", "cargo", "go", "bash", "sh", "curl", "wget", "pytest"]) {
         expect(BUILTIN_ALLOWED_PROGRAMS.has(p)).toBe(true);
       }

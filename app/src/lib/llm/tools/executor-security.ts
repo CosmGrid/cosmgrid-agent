@@ -64,7 +64,17 @@ export async function runSecurityPrecheck(
     const allowedPrograms = await resolveAllowedPrograms(ctx.projectId);
     const check = checkCommand(raw, ctx.blockedCommands ?? [], allowedPrograms);
     if (check.verdict === "block") return { denied: { status: "denied", output: `已拦截：${check.reason}` }, reasonCode: "COMMAND_BLOCKED" };
-    return { security: { kind: "command", verdict: check.verdict, reason: check.reason } };
+    return {
+      security: {
+        kind: "command",
+        verdict: check.verdict,
+        reason: check.reason,
+        ...(check.commandClass ? { commandClass: check.commandClass } : {}),
+        ...(check.requiresHumanConfirmation !== undefined
+          ? { requiresHumanConfirmation: check.requiresHumanConfirmation }
+          : {}),
+      },
+    };
   }
 
   return { security: undefined };

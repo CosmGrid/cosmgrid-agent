@@ -64,6 +64,13 @@ export async function requireCommandAuthorizationAsV2(
   skipHumanConfirmation = false,
 ): Promise<ToolResultV2 | null> {
   const authorization = ctx.commandAuthorization;
+  if (authorization && authorization.permissionMode !== "read" && authorization.permissionMode !== "confirm" && authorization.permissionMode !== "auto") {
+    return deniedResult({
+      output: "命令授权模式无效，已拒绝执行。",
+      summary: deniedSummary,
+      reason: "未知 permissionMode",
+    });
+  }
   if (authorization?.permissionMode === "read" || !authorization?.requestHumanConfirm) {
     return deniedResult({
       output: "命令执行需要独立的人类确认通道，当前不可用，已拒绝。",
@@ -73,7 +80,7 @@ export async function requireCommandAuthorizationAsV2(
   }
   if (skipHumanConfirmation) return null;
   try {
-    if (!(await authorization.requestHumanConfirm(request))) {
+    if ((await authorization.requestHumanConfirm(request)) !== true) {
       return deniedResult({
         output: "用户拒绝了该命令。",
         summary: deniedSummary,
