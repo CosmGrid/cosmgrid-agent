@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { checkCommand, firstProgram, isPureReadCommand, isReadOnlyCommand, tryParseProgramArgs } from "../command-safety";
 import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 import { getCommandClass } from "@/lib/policy/command-program-spec";
+import { PATH_READ_BLOCKED_CASES } from "./path-read-block-matrix";
 
 describe("firstProgram", () => {
   it("取首个程序名", () => {
@@ -151,6 +152,14 @@ describe("P0-01C2a2 trusted ls 候选 grammar", () => {
     "keeps other path-read commands blocked: %s",
     (command) => expect(checkCommand(command).verdict).toBe("block"),
   );
+});
+
+describe("P0-01C2a3 cat/head/tail/wc 全部 argv 继续阻断", () => {
+  it.each(PATH_READ_BLOCKED_CASES)("$program $shape: $command", ({ command }) => {
+    const check = checkCommand(command);
+    expect(check.verdict).toBe("block");
+    expect(check).not.toHaveProperty("candidate");
+  });
 });
 
 // 2026-07-15 review 修复：find 在只读白名单里但只看程序名不看参数，

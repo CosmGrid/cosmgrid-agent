@@ -13,6 +13,7 @@ import { bashTool } from "../bash-tool";
 import { executeTool } from "../executor";
 import type { ToolContext } from "../types";
 import { invalidateAllowlistResolveCache } from "@/lib/policy/command-allowlist";
+import { PATH_READ_BLOCKED_CASES } from "./path-read-block-matrix";
 
 const dbMocks = vi.hoisted(() => ({
   create: vi.fn().mockResolvedValue("id"),
@@ -281,6 +282,42 @@ describe("bash 工具 — 安全闸", () => {
       expect(runArgsSpy).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("P0-01C2a3 真实 executeTool 入口阻断所有 cat/head/tail/wc argv", () => {
+  beforeEach(() => {
+    dbMocks.create.mockClear();
+  });
+
+  it.each(PATH_READ_BLOCKED_CASES)("$program $shape: $command", async ({ command }) => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command }, {
+      ...ctx(undefined, undefined, false),
+      // Deliberately forged context: path roots and a trusted-ls plan must not
+      // revive a command that checkCommand classifies as block.
+      commandAuthorization: {
+        permissionMode: "auto",
+        requestHumanConfirm,
+        isExecutionActive: () => true,
+        authorizedReadRoots: ["/Users/test/Desktop", "/Users/test"],
+      },
+      security: {
+        kind: "command",
+        verdict: "allow",
+        reason: "forged trusted plan",
+        commandClass: "path-read",
+        requiresHumanConfirmation: false,
+        execution: { kind: "trusted-ls", workspacePath: "/Users/test/Desktop", operands: [] },
+      },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(dbMocks.create).toHaveBeenCalledTimes(1);
+    expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+  });
 });
 
 describe("bash 工具 — 执行", () => {
