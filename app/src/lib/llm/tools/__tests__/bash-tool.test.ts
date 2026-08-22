@@ -320,6 +320,72 @@ describe("P0-01C2a3 真实 executeTool 入口阻断所有 cat/head/tail/wc argv"
   });
 });
 
+describe("P0-01C2b grep/rg 在所有权限档继续 fail closed", () => {
+  beforeEach(() => {
+    dbMocks.create.mockClear();
+  });
+
+  it.each(["read", "confirm", "auto"] as const)(
+    "canonical grep needle package.json 在 %s 档零确认、零执行",
+    async (permissionMode) => {
+      const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+      const r = await executeTool(bashTool, { command: "grep needle package.json" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode, requestHumanConfirm, authorizedReadRoots: ["/ws"] },
+      });
+      expect(r.status).toBe("denied");
+      expect(requestHumanConfirm).not.toHaveBeenCalled();
+      expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+      expect(runArgsSpy).not.toHaveBeenCalled();
+      expect(runSpy).not.toHaveBeenCalled();
+      expect(dbMocks.create).toHaveBeenCalledTimes(1);
+      expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+    },
+  );
+
+  it.each(["read", "confirm", "auto"] as const)(
+    "canonical rg needle package.json 在 %s 档零确认、零执行",
+    async (permissionMode) => {
+      const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+      const r = await executeTool(bashTool, { command: "rg needle package.json" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode, requestHumanConfirm, authorizedReadRoots: ["/ws"] },
+      });
+      expect(r.status).toBe("denied");
+      expect(requestHumanConfirm).not.toHaveBeenCalled();
+      expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+      expect(runArgsSpy).not.toHaveBeenCalled();
+      expect(runSpy).not.toHaveBeenCalled();
+      expect(dbMocks.create).toHaveBeenCalledTimes(1);
+      expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+    },
+  );
+
+  it("bash -c dynamic-exec 语义保持：read 拒绝，confirm/auto 各确认后精确走 runArgs", async () => {
+    const readConfirm = vi.fn().mockResolvedValue(true);
+    const read = await executeTool(bashTool, { command: "bash -c 'echo ok'" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm: readConfirm, authorizedReadRoots: ["/ws"] },
+    });
+    expect(read.status).toBe("denied");
+    expect(readConfirm).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+
+    for (const permissionMode of ["confirm", "auto"] as const) {
+      runArgsSpy.mockClear();
+      const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+      const r = await executeTool(bashTool, { command: "bash -c 'echo ok'" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: { permissionMode, requestHumanConfirm, authorizedReadRoots: ["/ws"] },
+      });
+      expect(r.status).toBe("success");
+      expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
+      expect(runArgsSpy).toHaveBeenCalledWith(["bash", "-c", "echo ok"], "/ws");
+      expect(runSpy).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("bash 工具 — 执行", () => {
   it.each(["read", "confirm", "auto"] as const)(
     "trusted ls 在 %s 模式不弹确认，只走一次 runAuthorizedLs 且不走 runArgs",
