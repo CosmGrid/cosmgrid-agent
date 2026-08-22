@@ -155,10 +155,23 @@ describe("P0-01C2a2 trusted ls 候选 grammar", () => {
 });
 
 describe("P0-01C2a3 cat/head/tail/wc 全部 argv 继续阻断", () => {
+  it("共享矩阵精确覆盖 108 条且 command 唯一", () => {
+    expect(PATH_READ_BLOCKED_CASES).toHaveLength(108);
+    expect(new Set(PATH_READ_BLOCKED_CASES.map(({ command }) => command)).size).toBe(108);
+  });
+
   it.each(PATH_READ_BLOCKED_CASES)("$program $shape: $command", ({ command }) => {
     const check = checkCommand(command);
     expect(check.verdict).toBe("block");
     expect(check).not.toHaveProperty("candidate");
+  });
+
+  it.each([
+    "g\\rep needle package.json",
+    "r\\g needle package.json",
+  ])("escaped search program remains path-read classified, not only an allowlist miss: %s", (command) => {
+    expect(checkCommand(command)).toMatchObject({ verdict: "block", commandClass: "path-read" });
+    expect(checkCommand(command)).not.toHaveProperty("candidate");
   });
 });
 
