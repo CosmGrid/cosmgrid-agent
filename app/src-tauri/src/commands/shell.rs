@@ -4,7 +4,7 @@
 use tauri_plugin_shell::ShellExt;
 
 use crate::process::{run_with_idle_timeout, ShellOutput};
-use crate::security::{extra_path_dirs, fnv1a_hex, prepend_path_dirs};
+use crate::security::{extra_path_dirs, fnv1a_hex, launch_authorized_ls_with, prepend_path_dirs};
 
 fn shell_command_with_path(
     app: &tauri::AppHandle,
@@ -66,6 +66,32 @@ pub async fn run_shell_args(
         .current_dir(cwd)
         .spawn()
         .map_err(|e| e.to_string())?;
+    run_with_idle_timeout(rx, child, SHELL_IDLE_TIMEOUT_SECS).await
+}
+
+/// Execute the only path-read command currently trusted by the command layer.
+/// All path and executable validation happens in this call before spawn.
+#[tauri::command]
+pub async fn run_authorized_ls(
+    app: tauri::AppHandle,
+    workspace: String,
+    operands: Vec<String>,
+) -> Result<ShellOutput, String> {
+    let (rx, child) = launch_authorized_ls_with(&workspace, &operands, |launch| {
+        let program = launch
+            .program
+            .to_str()
+            .ok_or_else(|| "可信 ls 程序路径不是 UTF-8".to_string())?;
+        let mut command = app.shell().command(program).env_clear();
+        for (key, value) in &launch.env {
+            command = command.env(key, value);
+        }
+        command
+            .args(launch.args.clone())
+            .current_dir(&launch.cwd)
+            .spawn()
+            .map_err(|e| e.to_string())
+    })?;
     run_with_idle_timeout(rx, child, SHELL_IDLE_TIMEOUT_SECS).await
 }
 

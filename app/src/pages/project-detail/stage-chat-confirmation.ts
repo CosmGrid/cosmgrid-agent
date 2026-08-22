@@ -11,6 +11,7 @@ export interface StageChatConfirmationController {
 
 export interface StageChatConfirmationTurn {
   requestConfirm: (request: ToolConfirmRequest) => Promise<boolean>;
+  isActive: () => boolean;
   invalidate: () => void;
   finish: () => void;
 }
@@ -31,6 +32,7 @@ export function createStageChatConfirmationController(
         queue.resolveAll(false);
       };
       return {
+        isActive: () => !signal.aborted && turnGeneration === generation,
         requestConfirm(request) {
           if (signal.aborted || turnGeneration !== generation) return Promise.resolve(false);
           return queue.request(request);

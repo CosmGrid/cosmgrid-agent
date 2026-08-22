@@ -155,6 +155,7 @@ export function StageChat({ stage, model, credential, apiKey, conversationId, fa
           commandAuthorization: {
             permissionMode: "confirm",
             requestHumanConfirm: turn.requestConfirm,
+            isExecutionActive: turn.isActive,
           },
           approveMcpLaunch: (server, workspacePath) => turn.requestConfirm({
             toolName: `mcp-server:${server.name}`,

@@ -29,6 +29,8 @@ import { executeTool, MAX_OUTPUT_CHARS } from "../executor";
 import { setGitSnapshot } from "../git-snapshot";
 import { setShellAdapter, type ShellAdapter } from "../shell-adapter";
 import type { AnyToolDefinition, ToolContext } from "../types";
+import { runSecurityPrecheck, validateTrustedLsCandidate } from "../executor-security";
+import type { CommandCheck } from "../command-safety";
 
 // 阶段2（2026-07-11）：每次 executeTool 调用都用独立 messageId（避免 doom-loop
 // 跨测试互相污染），用 ctxFn() 而非常量。
@@ -297,5 +299,85 @@ describe("executeTool — L6 声明式安全检查", () => {
       commandClass: "dynamic-exec",
       requiresHumanConfirmation: true,
     });
+  });
+});
+
+describe("P0-01C2a2 trusted-ls executor boundary", () => {
+  const commandTool: AnyToolDefinition = {
+    name: "bash",
+    description: "command",
+    parameters: z.object({ command: z.string() }),
+    readOnly: false,
+    security: { kind: "command", commandField: "command" },
+    execute: async () => ({ status: "success" as const, summary: "ok", output: "ok" }),
+  };
+
+  const auth = {
+    permissionMode: "read" as const,
+    requestHumanConfirm: vi.fn().mockResolvedValue(true),
+    isExecutionActive: vi.fn().mockReturnValue(true),
+    authorizedReadRoots: ["/ws"],
+  };
+
+  it("returns a non-executable path-validation candidate for ls", async () => {
+    const pre = await runSecurityPrecheck(commandTool, { command: "ls -- src package.json" }, {
+      ...ctxFn(),
+      commandAuthorization: auth,
+    });
+    expect(pre).toMatchObject({
+      security: {
+        kind: "command",
+        verdict: "allow",
+        commandClass: "path-read",
+        requiresHumanConfirmation: false,
+        execution: { kind: "trusted-ls", workspacePath: "/ws", operands: ["src", "package.json"] },
+      },
+    });
+  });
+
+  it("does not treat a missing or mismatched candidate as an execution allow", async () => {
+    const pre = await runSecurityPrecheck(commandTool, { command: "ls" }, {
+      ...ctxFn(),
+      commandAuthorization: auth,
+    });
+    expect(pre).toMatchObject({ security: { verdict: "allow", execution: { kind: "trusted-ls", operands: [] } } });
+    const security = "security" in pre ? pre.security : undefined;
+    expect(security && (security as { candidate?: unknown }).candidate).toBeUndefined();
+  });
+
+  it.each([
+    ["missing candidate", { verdict: "needs-path-validation", commandClass: "path-read" }],
+    ["unknown candidate kind", { verdict: "needs-path-validation", commandClass: "path-read", candidate: { kind: "cat", operands: [] } }],
+    ["mismatched command class", { verdict: "needs-path-validation", commandClass: "pure-read", candidate: { kind: "ls", operands: [] } }],
+  ])("rejects a forged %s before execution", (_label, forged) => {
+    const result = validateTrustedLsCandidate(forged as unknown as CommandCheck, {
+      ...ctxFn(),
+      commandAuthorization: auth,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it.each([
+    ["missing authorization", undefined],
+    ["missing confirmation callback", { ...auth, requestHumanConfirm: undefined }],
+    ["missing active callback", { ...auth, isExecutionActive: undefined }],
+    ["inactive", { ...auth, isExecutionActive: () => false }],
+    ["active callback throws", { ...auth, isExecutionActive: () => { throw new Error("stale"); } }],
+    ["invalid permission mode", { ...auth, permissionMode: "bogus" }],
+    ["empty roots", { ...auth, authorizedReadRoots: [] }],
+    ["multiple roots", { ...auth, authorizedReadRoots: ["/ws", "/other"] }],
+    ["external root", { ...auth, authorizedReadRoots: ["/Users/test/Desktop"] }],
+    ["home root", { ...auth, authorizedReadRoots: ["/Users/test"] }],
+  ])("rejects trusted ls with %s", (_label, commandAuthorization) => {
+    const result = validateTrustedLsCandidate({
+      verdict: "needs-path-validation",
+      reason: "candidate",
+      commandClass: "path-read",
+      candidate: { kind: "ls", operands: [] },
+    }, {
+      ...ctxFn(),
+      ...(commandAuthorization ? { commandAuthorization: commandAuthorization as never } : {}),
+    });
+    expect(result.ok).toBe(false);
   });
 });

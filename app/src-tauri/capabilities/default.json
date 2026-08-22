@@ -16,6 +16,7 @@
     "allow-resolve-cli-program",
     "allow-run-shell-command",
     "allow-run-shell-args",
+    "allow-run-authorized-ls",
     "allow-fetch-url-backend",
     "allow-fetch-url-rendered",
     "allow-git-commit-file",

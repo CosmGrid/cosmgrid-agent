@@ -1,5 +1,5 @@
 import type { AnyToolDefinition, ToolContext, ToolResult } from "./types";
-import { checkCommand } from "./command-safety";
+import { checkCommand, type CommandCheck } from "./command-safety";
 import { checkPath, checkWritePath } from "./path-safety";
 import { resolveAllowedPrograms } from "@/lib/policy/command-allowlist";
 import { checkSkillToolAccess } from "@/lib/llm/capability-registry";
@@ -7,6 +7,64 @@ import { checkSkillToolAccess } from "@/lib/llm/capability-registry";
 export type SecurityPrecheck =
   | { denied: ToolResult; reasonCode?: "PATH_BLOCKED" | "COMMAND_BLOCKED" | "SKILL_CAPABILITY_DENIED" }
   | { security: ToolContext["security"] };
+
+export type TrustedLsAuthorizationResult =
+  | { ok: true; workspacePath: string; operands: readonly string[] }
+  | { ok: false; reason: string };
+
+/**
+ * Validate the structured candidate and its turn authorization without
+ * re-parsing the original command.  This is deliberately exported as a
+ * small pure boundary so forged runtime values are covered independently of
+ * the command parser.
+ */
+export function validateTrustedLsCandidate(
+  check: CommandCheck,
+  ctx: ToolContext,
+): TrustedLsAuthorizationResult {
+  if (check.verdict !== "needs-path-validation" || check.commandClass !== "path-read") {
+    return { ok: false, reason: "trusted ls candidate verdict/class mismatch" };
+  }
+  const candidate = check.candidate as unknown;
+  if (
+    !candidate
+    || typeof candidate !== "object"
+    || (candidate as { kind?: unknown }).kind !== "ls"
+    || !Array.isArray((candidate as { operands?: unknown }).operands)
+    || !(candidate as { operands: unknown[] }).operands.every((operand) => typeof operand === "string")
+  ) {
+    return { ok: false, reason: "trusted ls candidate missing or malformed" };
+  }
+
+  const authorization = ctx.commandAuthorization;
+  if (
+    !authorization
+    || (authorization.permissionMode !== "read"
+      && authorization.permissionMode !== "confirm"
+      && authorization.permissionMode !== "auto")
+    || typeof authorization.requestHumanConfirm !== "function"
+    || typeof authorization.isExecutionActive !== "function"
+    || typeof ctx.workspacePath !== "string"
+    || ctx.workspacePath.length === 0
+    || !Array.isArray(authorization.authorizedReadRoots)
+    || authorization.authorizedReadRoots.length !== 1
+    || authorization.authorizedReadRoots[0] !== ctx.workspacePath
+  ) {
+    return { ok: false, reason: "trusted ls authorization context missing or mismatched" };
+  }
+  try {
+    if (authorization.isExecutionActive() !== true) {
+      return { ok: false, reason: "trusted ls execution turn inactive" };
+    }
+  } catch {
+    return { ok: false, reason: "trusted ls execution state threw" };
+  }
+  return {
+    ok: true,
+    workspacePath: ctx.workspacePath,
+    operands: (candidate as { operands: readonly string[] }).operands,
+  };
+}
 
 /**
  * 按 tool.security 声明统一跑路径 / 命令安全检查。
@@ -64,17 +122,43 @@ export async function runSecurityPrecheck(
     const allowedPrograms = await resolveAllowedPrograms(ctx.projectId);
     const check = checkCommand(raw, ctx.blockedCommands ?? [], allowedPrograms);
     if (check.verdict === "block") return { denied: { status: "denied", output: `已拦截：${check.reason}` }, reasonCode: "COMMAND_BLOCKED" };
-    return {
-      security: {
-        kind: "command",
-        verdict: check.verdict,
-        reason: check.reason,
-        ...(check.commandClass ? { commandClass: check.commandClass } : {}),
-        ...(check.requiresHumanConfirmation !== undefined
-          ? { requiresHumanConfirmation: check.requiresHumanConfirmation }
-          : {}),
-      },
-    };
+    if (check.verdict === "needs-path-validation") {
+      const authorization = validateTrustedLsCandidate(check, ctx);
+      if (!authorization.ok) {
+        return {
+          denied: { status: "denied", output: `已拒绝：${authorization.reason}` },
+          reasonCode: "COMMAND_BLOCKED",
+        };
+      }
+      return {
+        security: {
+          kind: "command",
+          verdict: "allow",
+          reason: check.reason,
+          commandClass: "path-read",
+          requiresHumanConfirmation: false,
+          execution: {
+            kind: "trusted-ls",
+            workspacePath: authorization.workspacePath,
+            operands: authorization.operands,
+          },
+        },
+      };
+    }
+    if (check.verdict === "allow") {
+      return {
+        security: {
+          kind: "command",
+          verdict: "allow",
+          reason: check.reason,
+          commandClass: check.commandClass,
+          requiresHumanConfirmation: true,
+        },
+      };
+    }
+    // The discriminated union is exhaustive; this fallback only protects
+    // against malformed runtime values from an untyped boundary.
+    return { denied: { status: "denied", output: "已拒绝：命令安全判定状态无效" }, reasonCode: "COMMAND_BLOCKED" };
   }
 
   return { security: undefined };

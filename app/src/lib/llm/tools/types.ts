@@ -7,7 +7,24 @@
 // Vercel AI SDK tool()。每个 tool = name + description + zod 参数 schema + execute。
 
 import type { z } from "zod";
+import type { TrustedLsCandidate } from "./command-safety";
 import type { CommandClass } from "@/lib/policy/command-program-spec";
+
+export interface CommandAuthorizationInput {
+  permissionMode: "read" | "confirm" | "auto";
+  requestHumanConfirm?: (request: ToolConfirmRequest) => Promise<boolean>;
+  isExecutionActive?: () => boolean;
+}
+
+export interface CommandAuthorization extends CommandAuthorizationInput {
+  authorizedReadRoots: readonly string[];
+}
+
+export interface TrustedLsExecution {
+  kind: "trusted-ls";
+  workspacePath: string;
+  operands: readonly string[];
+}
 
 /** 工具执行上下文（工作区边界 + 关联实体） */
 export interface ToolContext {
@@ -22,10 +39,7 @@ export interface ToolContext {
   /** 写操作的用户确认回调；返回 false 表示用户拒绝 */
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
   /** 命令执行专用的人类授权通道；故意与文件写入 confirm 分离，auto 也不能静默放行命令。 */
-  commandAuthorization?: {
-    permissionMode: "read" | "confirm" | "auto";
-    requestHumanConfirm?: (request: ToolConfirmRequest) => Promise<boolean>;
-  };
+  commandAuthorization?: CommandAuthorization;
   /** 项目自定义的命令黑名单前缀（bash 工具用，叠加在内置危险拦截之上） */
   blockedCommands?: string[];
   /** K7 能力门控：本轮允许的 capability 集（允许集）。来源 = 当前工作流阶段策略
@@ -45,8 +59,38 @@ export interface ToolContext {
   security?:
     | { kind: "read-path"; resolved: string }
     | { kind: "write-path"; resolved: string; external: boolean }
-    | { kind: "command"; verdict: "allow" | "block"; reason?: string; commandClass?: CommandClass; requiresHumanConfirmation?: boolean };
+    | CommandSecurity;
 }
+
+export type CommandSecurity =
+  | {
+      kind: "command";
+      verdict: "block";
+      reason: string;
+      commandClass?: CommandClass;
+    }
+  | {
+      kind: "command";
+      verdict: "needs-path-validation";
+      reason: string;
+      commandClass: "path-read";
+      candidate: TrustedLsCandidate;
+    }
+  | {
+      kind: "command";
+      verdict: "allow";
+      reason: string;
+      commandClass: "pure-read" | "dynamic-exec";
+      requiresHumanConfirmation: true;
+    }
+  | {
+      kind: "command";
+      verdict: "allow";
+      reason: string;
+      commandClass: "path-read";
+      requiresHumanConfirmation: false;
+      execution: TrustedLsExecution;
+    };
 
 /** 结构化追问用户时的一个候选选项 */
 export interface AskUserOption {

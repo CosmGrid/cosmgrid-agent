@@ -7,7 +7,7 @@ const request: ToolConfirmRequest = { toolName: "bash", summary: "run pwd" };
 function commandContext(requestHumanConfirm: NonNullable<NonNullable<ToolContext["commandAuthorization"]>["requestHumanConfirm"]>): ToolContext {
   return {
     workspacePath: "/ws",
-    commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+    commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
   };
 }
 
