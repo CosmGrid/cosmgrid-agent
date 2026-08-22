@@ -45,6 +45,7 @@ export async function prepareChatWorkspaceRuntime(
   };
   const commandAuthorization = {
     permissionMode: args.permissionMode,
+    isExecutionActive: () => !args.stopIfAborted(),
     requestHumanConfirm: async (request: ToolConfirmRequest): Promise<boolean> => {
       if (args.stopIfAborted()) return false;
       return args.requestConfirm(request);

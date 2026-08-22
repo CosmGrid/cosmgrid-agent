@@ -10,8 +10,8 @@ fn main() {
     // 在本地 origin 下都是"没声明权限也放行"，声明了任何一个之后，全部自定义命令
     // 都会被强制走权限检查。所以这里必须把 invoke_handler 里注册的全部命令都列出来，
     // 否则会连带炸掉 CLI spawn / git 提交 / API Key 存取这些已经在跑的功能。
-    let attributes = tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
+    let attributes =
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "save_api_key",
             "get_api_key",
             "delete_api_key",
@@ -23,6 +23,7 @@ fn main() {
             "resolve_cli_program",
             "run_shell_command",
             "run_shell_args",
+            "run_authorized_ls",
             "fetch_url_backend",
             "fetch_url_rendered",
             "report_rendered_page",
@@ -32,7 +33,6 @@ fn main() {
             "resolve_realpath",
             "grant_workspace_fs_access",
             "set_menu_language",
-        ]),
-    );
+        ]));
     tauri_build::try_build(attributes).expect("failed to run tauri-build");
 }

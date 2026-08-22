@@ -216,6 +216,26 @@ describe("prepareChatWorkspaceRuntime", () => {
     expect(requestConfirm).not.toHaveBeenCalled();
   });
 
+  it("命令授权 active 状态随当前轮次 Stop 切换，并严格返回 true/false", async () => {
+    let stopped = false;
+    await prepareChatWorkspaceRuntime({
+      workspacePath: "/tmp/project",
+      primaryIsCli: false,
+      includeWriteTools: true,
+      conversationId: "conv-1",
+      assistantId: "assistant-1",
+      permissionMode: "read",
+      requestConfirm: vi.fn(),
+      requestAskUser: vi.fn(),
+      getDesktopPath: async () => null,
+      stopIfAborted: () => stopped,
+    });
+    const passedArgs = mocks.prepareWorkspaceToolRuntime.mock.calls[0][0];
+    expect(passedArgs.commandAuthorization.isExecutionActive()).toBe(true);
+    stopped = true;
+    expect(passedArgs.commandAuthorization.isExecutionActive()).toBe(false);
+  });
+
   it("Stop 后旧轮才请求 ask 或 MCP 启动时不再进入新轮弹窗队列", async () => {
     let stopped = false;
     const requestConfirm = vi.fn(async () => true);

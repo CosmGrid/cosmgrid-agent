@@ -45,6 +45,59 @@ export const bashTool: ToolDefinition<BashParams> = {
   readOnly: false,
   security: { kind: "command", commandField: "command" },
   async execute(input, ctx): Promise<ToolResultV2> {
+    const trustedExecution = ctx.security?.kind === "command"
+      && ctx.security.verdict === "allow"
+      && "execution" in ctx.security
+      && ctx.security.execution.kind === "trusted-ls"
+      ? ctx.security.execution
+      : undefined;
+    if (trustedExecution) {
+      try {
+        if (ctx.commandAuthorization?.isExecutionActive?.() !== true) {
+          return deniedResult({ output: "当前对话轮次已停止，trusted ls 已拒绝。", summary: "命令轮次已失效", reason: "execution inactive" });
+        }
+      } catch {
+        return deniedResult({ output: "当前对话轮次状态异常，trusted ls 已拒绝。", summary: "命令轮次无效", reason: "execution state threw" });
+      }
+      const runAuthorizedLs = getShellAdapter().runAuthorizedLs;
+      if (!runAuthorizedLs) {
+        return deniedResult({ output: "当前桌面端不支持受信 ls，已拒绝执行。", summary: "trusted ls 不可用", reason: "adapter capability missing" });
+      }
+      try {
+        const res = await runAuthorizedLs({
+          workspacePath: trustedExecution.workspacePath,
+          operands: trustedExecution.operands,
+        });
+        const ok = res.code === 0 || res.code === null;
+        const stdout = clip(res.stdout).trimEnd();
+        const stderr = res.stderr.trim() ? `--- stderr ---\n${clip(res.stderr).trimEnd()}` : "";
+        const body = ["$ ls", stdout, stderr, `exit code: ${res.code ?? "?"}`].filter(Boolean).join("\n");
+        if (ok) {
+          return {
+            ...successResult({ output: body, summary: `ls → exit ${res.code ?? 0}` }),
+            userConfirmed: false,
+          };
+        }
+        return {
+          ...errorResult({
+          output: body,
+          summary: `ls 退出码 ${res.code}`,
+          error: { code: TOOL_COMMAND_FAILED, rootCauseHint: stderr || `命令退出码 ${res.code}`, retryable: false },
+          }),
+          userConfirmed: false,
+        };
+      } catch (err) {
+        return {
+          ...errorResult({
+          output: `执行失败：${err instanceof Error ? err.message : String(err)}`,
+          summary: "trusted ls 执行失败",
+          error: { code: TOOL_COMMAND_FAILED, rootCauseHint: String(err), retryable: false },
+          }),
+          userConfirmed: false,
+        };
+      }
+    }
+
     // 闸 1：安全分类，现在由 executor 按 tool.security 声明强制跑（L6 安全网收拢，2026-07-09）——
     // 走到这里说明 checkCommand 已经判过 allow，block 在 executor 层就直接 denied 了。
     //

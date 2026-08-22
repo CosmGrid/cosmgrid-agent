@@ -23,6 +23,8 @@ export interface ShellAdapter {
   run(command: string, cwd: string): Promise<ShellResult>;
   /** 内部已构造好的 argv —— 不经 sh，杜绝路径里元字符被解释。 */
   runArgs(args: string[], cwd: string): Promise<ShellResult>;
+  /** Trusted ls path: native side revalidates workspace and operands before spawn. */
+  runAuthorizedLs?(input: { workspacePath: string; operands: readonly string[] }): Promise<ShellResult>;
 }
 
 const tauriShell: ShellAdapter = {
@@ -33,6 +35,8 @@ const tauriShell: ShellAdapter = {
       args: args.slice(1),
       cwd,
     }),
+  runAuthorizedLs: ({ workspacePath, operands }) =>
+    invoke<ShellResult>("run_authorized_ls", { workspace: workspacePath, operands: [...operands] }),
 };
 
 let active: ShellAdapter = tauriShell;

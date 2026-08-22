@@ -21,7 +21,8 @@ use commands::keychain::{delete_api_key, get_api_key, save_api_key};
 use commands::menu::set_menu_language;
 use commands::rpc::{kill_rpc_process, spawn_rpc_process, write_rpc_stdin, RpcChildren};
 use commands::shell::{
-    git_commit_file, git_read, init_shadow_git_repo, run_shell_args, run_shell_command,
+    git_commit_file, git_read, init_shadow_git_repo, run_authorized_ls, run_shell_args,
+    run_shell_command,
 };
 use security::{grant_workspace_fs_access, resolve_realpath};
 
@@ -104,6 +105,7 @@ pub fn run() {
             resolve_cli_program,
             run_shell_command,
             run_shell_args,
+            run_authorized_ls,
             fetch_url_backend,
             fetch_url_rendered,
             report_rendered_page,

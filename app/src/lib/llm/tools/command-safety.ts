@@ -14,14 +14,31 @@ import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 import { DANGEROUS_COMMAND_PATTERNS } from "@/lib/security-invariants/dangerous-command-patterns";
 import { getCommandClass, isKnownCommandProgram, type CommandClass } from "@/lib/policy/command-program-spec";
 
-export type CommandVerdict = "allow" | "block";
+export type CommandVerdict = "allow" | "block" | "needs-path-validation";
 
-export interface CommandCheck {
-  verdict: CommandVerdict;
-  reason: string;
-  commandClass?: CommandClass;
-  requiresHumanConfirmation?: boolean;
+export interface TrustedLsCandidate {
+  kind: "ls";
+  operands: readonly string[];
 }
+
+export type CommandCheck =
+  | {
+      verdict: "block";
+      reason: string;
+      commandClass?: CommandClass;
+    }
+  | {
+      verdict: "needs-path-validation";
+      reason: string;
+      commandClass: "path-read";
+      candidate: TrustedLsCandidate;
+    }
+  | {
+      verdict: "allow";
+      reason: string;
+      commandClass: "pure-read" | "dynamic-exec";
+      requiresHumanConfirmation: true;
+    };
 
 type ShellToken = string | { op: string; pattern?: string };
 
@@ -90,6 +107,32 @@ function pureReadGrammar(program: string, args: string[]): boolean {
     return args.every((arg) => !arg.startsWith("-"));
   }
   return false;
+}
+
+function trustedLsGrammar(command: string): TrustedLsCandidate | null {
+  const cmd = command.trim();
+  if (!cmd || /\$\(|`|\0/.test(cmd)) return null;
+  let tokens: ShellToken[];
+  try {
+    tokens = parseShellCommand(cmd) as ShellToken[];
+  } catch {
+    return null;
+  }
+  if (tokens.some((token) => typeof token !== "string")) return null;
+  const argv = tokens as string[];
+  if (argv[0] !== "ls") return null;
+  if (argv.length === 1) return { kind: "ls", operands: [] };
+  if (argv[1] !== "--" || argv.length < 3) return null;
+  const operands = argv.slice(2);
+  if (operands.some((operand) => (
+    operand.length === 0
+    || operand.startsWith("-")
+    || operand.includes("\0")
+    || operand.startsWith("~")
+    || operand.startsWith("@")
+    || /[*?\[\]{}]/.test(operand)
+  ))) return null;
+  return { kind: "ls", operands };
 }
 
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "npx", "bun"]);
@@ -233,6 +276,16 @@ export function checkCommand(
     return { verdict: "block", reason: `程序 "${prog}" 未分类或不在白名单` };
   }
   const commandClass = getCommandClass(prog) as CommandClass;
+  if (commandClass === "path-read" && prog === "ls") {
+    const candidate = trustedLsGrammar(cmd);
+    if (!candidate) return { verdict: "block", reason: "ls 仅允许裸命令或 ls -- PATH，参数不符合严格 grammar", commandClass };
+    return {
+      verdict: "needs-path-validation",
+      reason: "ls 候选必须经过唯一 workspace root 与原生 realpath 验证",
+      commandClass,
+      candidate,
+    };
+  }
   if (commandClass === "dynamic-exec") return { verdict: "allow", reason: "动态命令，必须真人确认", commandClass, requiresHumanConfirmation: true };
   if (commandClass === "pure-read" && pureReadGrammar(prog, parsed.args)) {
     return {
@@ -242,7 +295,7 @@ export function checkCommand(
       requiresHumanConfirmation: true,
     };
   }
-  return { verdict: "block", reason: `${commandClass} 命令当前未开放 grammar`, commandClass, requiresHumanConfirmation: true };
+  return { verdict: "block", reason: `${commandClass} 命令当前未开放 grammar`, commandClass };
 }
 
 /**

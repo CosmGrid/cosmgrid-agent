@@ -82,7 +82,9 @@ pub fn grant_workspace_fs_access(app: tauri::AppHandle, path: String) -> Result<
     // 目录本身（给 exists/stat/read-dir 用）+ 递归通配（给目录下所有文件用）。
     let entries = vec![
         FsPathEntry { path: root.clone() },
-        FsPathEntry { path: format!("{root}/**") },
+        FsPathEntry {
+            path: format!("{root}/**"),
+        },
     ];
 
     // identifier 按目录内容哈希取稳定值：同一目录反复绑定（比如重启会话）不会无限堆叠新
@@ -160,6 +162,184 @@ where
         dirs.extend(env::split_paths(&existing));
     }
     env::join_paths(dirs).ok()
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthorizedLsPlan {
+    pub(crate) root: PathBuf,
+    pub(crate) targets: Vec<PathBuf>,
+}
+
+fn sensitive_component(component: &std::ffi::OsStr) -> bool {
+    let Some(value) = component.to_str() else {
+        return true;
+    };
+    let value = value.to_ascii_lowercase();
+    value == ".ssh"
+        || value == ".aws"
+        || value == ".gnupg"
+        || value == ".env"
+        || value.starts_with(".env.")
+        || value.starts_with("secret.")
+        || value.starts_with("secrets.")
+        || value == "keystore.json"
+        || value == "id_rsa"
+        || value.starts_with("id_rsa.")
+}
+
+fn contains_sensitive_component(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        std::path::Component::Normal(value) => sensitive_component(value),
+        _ => false,
+    })
+}
+
+pub(crate) fn trusted_ls_program() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return PathBuf::from("/bin/ls");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return PathBuf::from("/usr/bin/ls");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        PathBuf::new()
+    }
+}
+
+pub(crate) fn authorized_ls_environment() -> Vec<(String, String)> {
+    vec![
+        ("LC_ALL".to_string(), "C".to_string()),
+        ("LANG".to_string(), "C".to_string()),
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthorizedLsLaunch {
+    pub(crate) program: PathBuf,
+    pub(crate) args: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) env: Vec<(String, String)>,
+}
+
+pub(crate) fn validate_authorized_ls(
+    workspace: &str,
+    operands: &[String],
+) -> Result<AuthorizedLsPlan, String> {
+    if workspace.is_empty() || workspace.contains('\0') {
+        return Err("workspace 为空或包含 NUL".to_string());
+    }
+    let workspace_path = Path::new(workspace);
+    if !workspace_path.is_absolute() {
+        return Err("workspace 必须是绝对路径".to_string());
+    }
+    let root = std::fs::canonicalize(workspace_path)
+        .map_err(|e| format!("workspace realpath 失败：{e}"))?;
+    if !root.is_dir() || root.to_str().is_none() || contains_sensitive_component(&root) {
+        return Err("workspace 不是可用目录或包含敏感路径".to_string());
+    }
+
+    let mut targets = Vec::with_capacity(if operands.is_empty() {
+        1
+    } else {
+        operands.len()
+    });
+    let raw_operands: Vec<String> = if operands.is_empty() {
+        vec![".".to_string()]
+    } else {
+        operands.to_vec()
+    };
+    for operand in raw_operands {
+        if operand.is_empty()
+            || operand.contains('\0')
+            || operand.starts_with('-')
+            || operand.starts_with('~')
+            || operand.starts_with('@')
+            || operand
+                .chars()
+                .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+        {
+            return Err("ls operand 不符合严格 grammar".to_string());
+        }
+        let raw = Path::new(&operand);
+        let joined = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            root.join(raw)
+        };
+        let target =
+            std::fs::canonicalize(&joined).map_err(|e| format!("ls target realpath 失败：{e}"))?;
+        if !target.starts_with(&root)
+            || contains_sensitive_component(&target)
+            || target.to_str().is_none()
+        {
+            return Err("ls target 超出 workspace 或包含敏感路径".to_string());
+        }
+        targets.push(target);
+    }
+    Ok(AuthorizedLsPlan { root, targets })
+}
+
+/// Build the complete native launch description only after the full path plan
+/// has passed validation.  The program check uses metadata on the final path
+/// component, so a symlink to a regular file is not accepted as trusted.
+pub(crate) fn build_authorized_ls_launch_with_program(
+    plan: &AuthorizedLsPlan,
+    program: &Path,
+) -> Result<AuthorizedLsLaunch, String> {
+    if !program.is_absolute() {
+        return Err("固定可信 ls 程序必须是绝对路径".to_string());
+    }
+    let metadata =
+        std::fs::symlink_metadata(program).map_err(|e| format!("固定可信 ls 不可用：{e}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("固定可信 ls 必须是最终路径上的普通文件".to_string());
+    }
+    let program = program
+        .to_str()
+        .ok_or_else(|| "可信 ls 程序路径不是 UTF-8".to_string())?;
+    let mut args = Vec::with_capacity(plan.targets.len() + 1);
+    args.push("--".to_string());
+    for target in &plan.targets {
+        args.push(
+            target
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "ls target 不是 UTF-8".to_string())?,
+        );
+    }
+    Ok(AuthorizedLsLaunch {
+        program: PathBuf::from(program),
+        args,
+        cwd: plan.root.clone(),
+        env: authorized_ls_environment(),
+    })
+}
+
+pub(crate) fn prepare_authorized_ls_launch(
+    workspace: &str,
+    operands: &[String],
+) -> Result<AuthorizedLsLaunch, String> {
+    let plan = validate_authorized_ls(workspace, operands)?;
+    build_authorized_ls_launch_with_program(&plan, &trusted_ls_program())
+}
+
+/// Injection seam shared by production and tests: no launcher callback is
+/// reached until validation and the complete trusted launch description are
+/// ready.  Invalid plans therefore have a mechanically provable zero-launch
+/// path.
+pub(crate) fn launch_authorized_ls_with<R, F>(
+    workspace: &str,
+    operands: &[String],
+    launcher: F,
+) -> Result<R, String>
+where
+    F: FnOnce(&AuthorizedLsLaunch) -> Result<R, String>,
+{
+    let launch = prepare_authorized_ls_launch(workspace, operands)?;
+    launcher(&launch)
 }
 
 pub(crate) fn find_in_common_locations(program: &str) -> Option<PathBuf> {
@@ -245,7 +425,11 @@ pub(crate) fn fnv1a_hex(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepend_path_dirs, rpc_base_env};
+    use super::{
+        authorized_ls_environment, launch_authorized_ls_with, prepend_path_dirs, rpc_base_env,
+        trusted_ls_program, validate_authorized_ls,
+    };
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -282,5 +466,331 @@ mod tests {
                 PathBuf::from("/usr/bin"),
             ],
         );
+    }
+
+    #[test]
+    fn authorized_ls_validates_real_targets_and_rejects_escape_without_spawn() {
+        let root = std::env::temp_dir().join(format!("cosmgrid-ls-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        let external = root.with_extension("-external");
+        let _ = fs::remove_dir_all(&external);
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("secret.txt"), "secret").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(external.join("secret.txt"), root.join("src/link")).unwrap();
+
+        let sibling = root.with_file_name(format!(
+            "{}-sibling",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = fs::remove_dir_all(&sibling);
+        fs::create_dir_all(&sibling).unwrap();
+
+        let valid = validate_authorized_ls(root.to_str().unwrap(), &[]);
+        assert!(valid.is_ok());
+        assert!(validate_authorized_ls(
+            root.to_str().unwrap(),
+            &["src/main.rs".to_string(), "src".to_string()]
+        )
+        .is_ok());
+        for operands in [
+            vec!["src/link".to_string()],
+            vec!["../".to_string()],
+            vec![sibling.to_str().unwrap().to_string()],
+            vec!["src/main.rs".to_string(), "../".to_string()],
+        ] {
+            // A failed plan is the pre-spawn proof: the caller has no command to spawn.
+            assert!(validate_authorized_ls(root.to_str().unwrap(), &operands).is_err());
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&external);
+        let _ = fs::remove_dir_all(&sibling);
+    }
+
+    #[test]
+    fn authorized_ls_rejects_sensitive_components_and_non_utf8() {
+        let root =
+            std::env::temp_dir().join(format!("cosmgrid-ls-sensitive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".ssh")).unwrap();
+        fs::write(root.join(".ssh/config"), "Host *").unwrap();
+        for name in [
+            ".aws",
+            ".gnupg",
+            ".env",
+            ".env.local",
+            "secret.txt",
+            "secrets.json",
+            "keystore.json",
+            "id_rsa",
+            "id_rsa.pub",
+        ] {
+            fs::write(root.join(name), "sensitive").unwrap();
+        }
+        assert!(validate_authorized_ls(root.to_str().unwrap(), &[]).is_ok());
+        fs::write(root.join("notes~today"), "ordinary").unwrap();
+        fs::write(root.join("mail@host"), "ordinary").unwrap();
+        assert!(validate_authorized_ls(
+            root.to_str().unwrap(),
+            &["notes~today".to_string(), "mail@host".to_string()],
+        )
+        .is_ok());
+        assert!(validate_authorized_ls(root.to_str().unwrap(), &["~notes".to_string()]).is_err());
+        assert!(
+            validate_authorized_ls(root.to_str().unwrap(), &["@args.rsp".to_string()]).is_err()
+        );
+        for name in [
+            ".ssh/config",
+            ".aws",
+            ".gnupg",
+            ".env",
+            ".env.local",
+            "secret.txt",
+            "secrets.json",
+            "keystore.json",
+            "id_rsa",
+            "id_rsa.pub",
+        ] {
+            assert!(
+                validate_authorized_ls(root.to_str().unwrap(), &[name.to_string()]).is_err(),
+                "{name}"
+            );
+        }
+        assert!(validate_authorized_ls(root.join(".ssh").to_str().unwrap(), &[]).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let bad_name = std::ffi::OsString::from_vec(vec![b'b', 0x80]);
+            let bad_path = root.join(&bad_name);
+            // Some macOS filesystems reject non-UTF-8 names at creation time;
+            // Linux CI exercises the real existing non-UTF-8 target below.
+            if fs::create_dir_all(&bad_path).is_err() {
+                let _ = fs::remove_dir_all(&root);
+                return;
+            }
+            std::os::unix::fs::symlink(&bad_path, root.join("nonutf-link")).unwrap();
+            // The operand is UTF-8, but canonicalize resolves it to an existing
+            // non-UTF-8 target; lossy conversion must never be used to continue.
+            assert!(
+                validate_authorized_ls(root.to_str().unwrap(), &["nonutf-link".to_string()])
+                    .is_err()
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn authorized_ls_uses_fixed_program_and_locale_only_environment() {
+        assert!(trusted_ls_program().is_absolute());
+        assert!(matches!(
+            trusted_ls_program().to_str(),
+            Some("/bin/ls") | Some("/usr/bin/ls")
+        ));
+        assert_eq!(
+            authorized_ls_environment(),
+            vec![("LC_ALL".into(), "C".into()), ("LANG".into(), "C".into())]
+        );
+        assert!(!authorized_ls_environment()
+            .iter()
+            .any(|(key, _)| key == "PATH" || key == "HOME" || key.contains("KEY")));
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", "/tmp/fake-ls-before:/usr/bin");
+        assert!(matches!(
+            trusted_ls_program().to_str(),
+            Some("/bin/ls") | Some("/usr/bin/ls")
+        ));
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+    }
+
+    #[test]
+    fn authorized_ls_launcher_is_not_called_for_any_invalid_plan_and_receives_final_spec() {
+        let root = std::env::temp_dir().join(format!("cosmgrid-ls-launch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        let external = root.with_file_name(format!(
+            "{}-outside",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = fs::remove_dir_all(&external);
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("secret"), "outside").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(external.join("secret"), root.join("escape")).unwrap();
+        let sibling = root.with_file_name(format!(
+            "{}-sibling",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = fs::remove_dir_all(&sibling);
+        fs::create_dir_all(&sibling).unwrap();
+
+        for operands in [
+            vec!["../".to_string()],
+            vec![sibling.to_str().unwrap().to_string()],
+            vec!["/tmp".to_string()],
+            vec!["escape".to_string()],
+            vec![".env".to_string()],
+            vec!["-la".to_string()],
+            vec!["src/main.rs".to_string(), "../".to_string()],
+        ] {
+            let mut launches = 0;
+            let result = launch_authorized_ls_with(root.to_str().unwrap(), &operands, |_spec| {
+                launches += 1;
+                Ok::<(), String>(())
+            });
+            assert!(result.is_err());
+            assert_eq!(
+                launches, 0,
+                "invalid operands must never reach launcher: {operands:?}"
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let bad_name = std::ffi::OsString::from_vec(vec![b'n', 0x80]);
+            let bad_path = root.join(&bad_name);
+            if fs::create_dir_all(&bad_path).is_ok() {
+                std::os::unix::fs::symlink(&bad_path, root.join("nonutf-link")).unwrap();
+                let mut launches = 0;
+                let result = launch_authorized_ls_with(
+                    root.to_str().unwrap(),
+                    &["nonutf-link".to_string()],
+                    |_spec| {
+                        launches += 1;
+                        Ok::<(), String>(())
+                    },
+                );
+                assert!(result.is_err());
+                assert_eq!(launches, 0);
+            }
+        }
+
+        let mut launches = 0;
+        let spec = launch_authorized_ls_with(
+            root.to_str().unwrap(),
+            &["src/main.rs".to_string()],
+            |spec| {
+                launches += 1;
+                assert_eq!(spec.program, trusted_ls_program());
+                assert_eq!(spec.cwd, fs::canonicalize(&root).unwrap());
+                assert_eq!(
+                    spec.args,
+                    vec![
+                        "--".to_string(),
+                        fs::canonicalize(root.join("src/main.rs"))
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string()
+                    ]
+                );
+                assert_eq!(spec.env, authorized_ls_environment());
+                Ok::<_, String>(spec.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(launches, 1);
+        assert_eq!(spec.args[0], "--");
+
+        let canonical_root = fs::canonicalize(&root).unwrap();
+        let bare = launch_authorized_ls_with(root.to_str().unwrap(), &[], |spec| {
+            assert_eq!(
+                spec.args,
+                vec![
+                    "--".to_string(),
+                    canonical_root.to_str().unwrap().to_string()
+                ]
+            );
+            Ok::<_, String>(())
+        });
+        assert!(bare.is_ok());
+        let multi = launch_authorized_ls_with(
+            root.to_str().unwrap(),
+            &["src".to_string(), "src/main.rs".to_string()],
+            |spec| {
+                assert_eq!(
+                    spec.args,
+                    vec![
+                        "--".to_string(),
+                        fs::canonicalize(root.join("src"))
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                        fs::canonicalize(root.join("src/main.rs"))
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                    ]
+                );
+                Ok::<_, String>(())
+            },
+        );
+        assert!(multi.is_ok());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let fake_dir = root.join("fake-bin");
+            fs::create_dir_all(&fake_dir).unwrap();
+            let marker = root.join("fake-ls-ran");
+            let fake_ls = fake_dir.join("ls");
+            fs::write(
+                &fake_ls,
+                format!("#!/bin/sh\nprintf hit > '{}'\n", marker.to_str().unwrap()),
+            )
+            .unwrap();
+            fs::set_permissions(&fake_ls, fs::Permissions::from_mode(0o755)).unwrap();
+            let result = launch_authorized_ls_with(root.to_str().unwrap(), &[], |spec| {
+                assert_eq!(spec.program, trusted_ls_program());
+                assert!(!spec.env.iter().any(|(key, _)| key == "PATH"));
+                let output = std::process::Command::new(&spec.program)
+                    .args(&spec.args)
+                    .env_clear()
+                    .envs(spec.env.iter().map(|(key, value)| (key, value)))
+                    .env("PATH", fake_dir.to_str().unwrap())
+                    .current_dir(&spec.cwd)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success());
+                Ok::<_, String>(())
+            });
+            assert!(result.is_ok());
+            assert!(!marker.exists(), "PATH fake ls sentinel must not run");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&external);
+        let _ = fs::remove_dir_all(&sibling);
+    }
+
+    #[test]
+    fn authorized_ls_launcher_rejects_missing_directory_and_symlink_programs() {
+        let root = std::env::temp_dir().join(format!("cosmgrid-ls-program-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let plan = validate_authorized_ls(root.to_str().unwrap(), &[]).unwrap();
+        let missing = root.join("missing-ls");
+        let directory = root.join("ls-dir");
+        fs::create_dir_all(&directory).unwrap();
+        assert!(super::build_authorized_ls_launch_with_program(&plan, &missing).is_err());
+        assert!(super::build_authorized_ls_launch_with_program(&plan, &directory).is_err());
+        #[cfg(unix)]
+        {
+            let target = root.join("real-ls");
+            fs::write(&target, "not executable").unwrap();
+            let link = root.join("ls-link");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(super::build_authorized_ls_launch_with_program(&plan, &link).is_err());
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 }

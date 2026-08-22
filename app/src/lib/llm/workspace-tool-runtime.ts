@@ -1,5 +1,5 @@
 import type { Tool } from "ai";
-import { buildAiSdkTools, createDefaultToolRegistry, ToolRegistry, type ToolConfirmRequest, type AskUserRequest } from "./tools";
+import { buildAiSdkTools, createDefaultToolRegistry, ToolRegistry, type ToolConfirmRequest, type AskUserRequest, type CommandAuthorizationInput } from "./tools";
 import { webFetchTool } from "./tools/web-fetch-tool";
 import { rememberTool } from "./tools/memory-tool";
 import { askUserTool } from "./tools/ask-user-tool";
@@ -17,10 +17,7 @@ export interface WorkspaceToolRuntimeOptions {
    *  让工具执行审计能按真实消息分组，而不是靠时间戳窗口猜。 */
   messageId?: string;
   confirm?: (preview: ToolConfirmRequest) => Promise<boolean>;
-  commandAuthorization?: {
-    permissionMode: "read" | "confirm" | "auto";
-    requestHumanConfirm?: (request: ToolConfirmRequest) => Promise<boolean>;
-  };
+  commandAuthorization?: CommandAuthorizationInput;
   /** 本地 MCP 进程启动前的独立人工授权；不能被 auto 权限档替换为自动同意。 */
   approveMcpLaunch?: (server: McpServerRow, workspacePath?: string) => Promise<boolean>;
   /** ask_user_question 工具用：结构化追问；null 表示停止时未作答。 */
@@ -49,6 +46,14 @@ export interface WorkspaceToolRuntime {
 export async function prepareWorkspaceToolRuntime(
   options: WorkspaceToolRuntimeOptions,
 ): Promise<WorkspaceToolRuntime> {
+  // The runtime is the sole source of command read roots.  Callers can provide
+  // authorization inputs, never a root list; each turn gets a replacement list.
+  const commandAuthorization = options.commandAuthorization
+    ? {
+        ...options.commandAuthorization,
+        authorizedReadRoots: options.workspacePath ? [options.workspacePath] : [],
+      }
+    : undefined;
   // 2026-07-10 OMO-7 capability guardrail：models.dev 明确说这个模型不支持工具调用
   // （不是查不到的 undefined）→ 不管有没有工作区，整个工具集都不给，直接返回空。
   // 给了也是白给——provider 大概率会因为带了 tools 参数直接 400，不如干脆不传。
@@ -73,7 +78,7 @@ export async function prepareWorkspaceToolRuntime(
         conversationId: options.conversationId,
         messageId: options.messageId,
         confirm: options.confirm,
-        ...(options.commandAuthorization ? { commandAuthorization: options.commandAuthorization } : {}),
+        ...(commandAuthorization ? { commandAuthorization } : {}),
         askUser: options.askUser,
         activeCaps: options.activeCaps,
       });
@@ -99,7 +104,7 @@ export async function prepareWorkspaceToolRuntime(
         conversationId: options.conversationId,
         messageId: options.messageId,
         confirm: options.confirm,
-        ...(options.commandAuthorization ? { commandAuthorization: options.commandAuthorization } : {}),
+        ...(commandAuthorization ? { commandAuthorization } : {}),
         askUser: options.askUser,
         blockedCommands: options.blockedCommands,
         activeCaps: options.activeCaps,

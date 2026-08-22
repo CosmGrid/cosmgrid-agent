@@ -38,16 +38,19 @@ vi.mock("@/lib/policy/policy-store", () => ({
 
 let runArgsSpy: ReturnType<typeof vi.fn>;
 let runSpy: ReturnType<typeof vi.fn>;
+let runAuthorizedLsSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   invalidateAllowlistResolveCache();
   policyStoreMocks.get.mockResolvedValue(null);
   runArgsSpy = vi.fn().mockResolvedValue({ stdout: "ok", stderr: "", code: 0 });
+  runAuthorizedLsSpy = vi.fn().mockResolvedValue({ stdout: "file.txt", stderr: "", code: 0 });
   // run（sh -c）保留但 AI 工具不应再调用它——D2 强保证：所有执行都走 runArgs。
   runSpy = vi.fn().mockResolvedValue({ stdout: "", stderr: "", code: 0 });
   const adapter: ShellAdapter = {
     run: runSpy as any,
     runArgs: runArgsSpy as any,
+    runAuthorizedLs: runAuthorizedLsSpy as any,
   };
   setShellAdapter(adapter);
 });
@@ -64,7 +67,7 @@ function ctx(
     messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     ...(confirm ? { confirm } : {}),
     ...(withCommandAuthorization && confirm
-      ? { commandAuthorization: { permissionMode: "confirm" as const, requestHumanConfirm: confirm } }
+      ? { commandAuthorization: { permissionMode: "confirm" as const, requestHumanConfirm: confirm, authorizedReadRoots: ["/ws"] } }
       : {}),
     ...(blocked ? { blockedCommands: blocked } : {}),
   };
@@ -133,7 +136,7 @@ describe("bash 工具 — 安全闸", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "custom-tool" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(requestHumanConfirm).not.toHaveBeenCalled();
@@ -163,7 +166,7 @@ describe("bash 工具 — 安全闸", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "git status" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "auto", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "auto", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("success");
     expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
@@ -177,7 +180,7 @@ describe("bash 工具 — 安全闸", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pwd" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "read", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(requestHumanConfirm).not.toHaveBeenCalled();
@@ -194,7 +197,7 @@ describe("bash 工具 — 安全闸", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "read", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(requestHumanConfirm).not.toHaveBeenCalled();
@@ -207,7 +210,7 @@ describe("bash 工具 — 安全闸", () => {
       const requestHumanConfirm = vi.fn().mockResolvedValue(true);
       const r = await executeTool(bashTool, { command }, {
         ...ctx(undefined, undefined, false),
-        commandAuthorization: { permissionMode, requestHumanConfirm },
+        commandAuthorization: { permissionMode, requestHumanConfirm, authorizedReadRoots: ["/ws"] },
       });
       expect(r.status).toBe("success");
       expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
@@ -220,7 +223,7 @@ describe("bash 工具 — 安全闸", () => {
     async (permissionMode) => {
       const r = await executeTool(bashTool, { command: "pwd" }, {
         ...ctx(undefined, undefined, false),
-        commandAuthorization: { permissionMode },
+        commandAuthorization: { permissionMode, authorizedReadRoots: ["/ws"] },
       });
       expect(r.status).toBe("denied");
       expect(runArgsSpy).not.toHaveBeenCalled();
@@ -233,7 +236,7 @@ describe("bash 工具 — 安全闸", () => {
       const requestHumanConfirm = vi.fn().mockResolvedValue(answer as never);
       const r = await executeTool(bashTool, { command: "pwd" }, {
         ...ctx(undefined, undefined, false),
-        commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+        commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
       });
       expect(r.status).toBe("denied");
       expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
@@ -245,7 +248,7 @@ describe("bash 工具 — 安全闸", () => {
     const requestHumanConfirm = vi.fn().mockRejectedValue(new Error("dialog closed"));
     const r = await executeTool(bashTool, { command: "pwd" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(requestHumanConfirm).toHaveBeenCalledTimes(1);
@@ -259,6 +262,7 @@ describe("bash 工具 — 安全闸", () => {
       commandAuthorization: {
         permissionMode: "invalid" as never,
         requestHumanConfirm,
+        authorizedReadRoots: ["/ws"],
       },
     });
     expect(r.status).toBe("denied");
@@ -271,7 +275,7 @@ describe("bash 工具 — 安全闸", () => {
     async (permissionMode) => {
       const r = await executeTool(bashTool, { command: "git status" }, {
         ...ctx(undefined, undefined, false),
-        commandAuthorization: { permissionMode },
+        commandAuthorization: { permissionMode, authorizedReadRoots: ["/ws"] },
       });
       expect(r.status).toBe("denied");
       expect(runArgsSpy).not.toHaveBeenCalled();
@@ -280,6 +284,136 @@ describe("bash 工具 — 安全闸", () => {
 });
 
 describe("bash 工具 — 执行", () => {
+  it.each(["read", "confirm", "auto"] as const)(
+    "trusted ls 在 %s 模式不弹确认，只走一次 runAuthorizedLs 且不走 runArgs",
+    async (permissionMode) => {
+      const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+      const r = await executeTool(bashTool, { command: "ls -- src package.json" }, {
+        ...ctx(undefined, undefined, false),
+        commandAuthorization: {
+          permissionMode,
+          requestHumanConfirm,
+          isExecutionActive: () => true,
+          authorizedReadRoots: ["/ws"],
+        },
+      });
+      expect(r.status).toBe("success");
+      expect(requestHumanConfirm).not.toHaveBeenCalled();
+      expect(runAuthorizedLsSpy).toHaveBeenCalledTimes(1);
+      expect(runAuthorizedLsSpy).toHaveBeenCalledWith({ workspacePath: "/ws", operands: ["src", "package.json"] });
+      expect(runArgsSpy).not.toHaveBeenCalled();
+      expect(r.userConfirmed).toBe(false);
+      expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+    },
+  );
+
+  it("trusted ls native error remains error and is audited as not user-confirmed", async () => {
+    runAuthorizedLsSpy.mockResolvedValue({ stdout: "", stderr: "denied", code: 1 });
+    const r = await executeTool(bashTool, { command: "ls" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode: "read",
+        requestHumanConfirm: vi.fn().mockResolvedValue(true),
+        isExecutionActive: () => true,
+        authorizedReadRoots: ["/ws"],
+      },
+    });
+    expect(r.status).toBe("error");
+    expect(r.userConfirmed).toBe(false);
+    expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("trusted ls adapter rejection remains error and audits userConfirmed=false", async () => {
+    runAuthorizedLsSpy.mockRejectedValue(new Error("native launch rejected"));
+    const r = await executeTool(bashTool, { command: "ls" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode: "auto",
+        requestHumanConfirm: vi.fn().mockResolvedValue(true),
+        isExecutionActive: () => true,
+        authorizedReadRoots: ["/ws"],
+      },
+    });
+    expect(r.status).toBe("error");
+    expect(r.userConfirmed).toBe(false);
+    expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("trusted ls active 首次严格 true、原生执行前第二次 false 时零执行", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const isExecutionActive = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const r = await executeTool(bashTool, { command: "ls" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode: "read",
+        requestHumanConfirm,
+        isExecutionActive,
+        authorizedReadRoots: ["/ws"],
+      },
+    });
+    expect(r.status).toBe("denied");
+    expect(isExecutionActive).toHaveBeenCalledTimes(2);
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("trusted ls active 首次严格 true、原生执行前第二次抛错时零执行", async () => {
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const isExecutionActive = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockImplementationOnce(() => { throw new Error("turn ended"); });
+    const r = await executeTool(bashTool, { command: "ls" }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode: "auto",
+        requestHumanConfirm,
+        isExecutionActive,
+        authorizedReadRoots: ["/ws"],
+      },
+    });
+    expect(r.status).toBe("denied");
+    expect(isExecutionActive).toHaveBeenCalledTimes(2);
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
+  it("trusted ls adapter missing, inactive, or throwing active state never invokes native execution", async () => {
+    const base = {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode: "read" as const,
+        requestHumanConfirm: vi.fn().mockResolvedValue(true),
+        isExecutionActive: () => true,
+        authorizedReadRoots: ["/ws"],
+      },
+    };
+    setShellAdapter({ run: runSpy as any, runArgs: runArgsSpy as any });
+    const missing = await executeTool(bashTool, { command: "ls" }, base);
+    expect(missing.status).toBe("denied");
+    expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+    setShellAdapter({ run: runSpy as any, runArgs: runArgsSpy as any, runAuthorizedLs: runAuthorizedLsSpy as any });
+    const inactive = await executeTool(bashTool, { command: "ls" }, {
+      ...base,
+      messageId: `${base.messageId}-inactive`,
+      commandAuthorization: { ...base.commandAuthorization, isExecutionActive: () => false },
+    });
+    expect(inactive.status).toBe("denied");
+    const throwing = await executeTool(bashTool, { command: "ls" }, {
+      ...base,
+      messageId: `${base.messageId}-throwing`,
+      commandAuthorization: { ...base.commandAuthorization, isExecutionActive: () => { throw new Error("stale"); } },
+    });
+    expect(throwing.status).toBe("denied");
+    expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+  });
+
   it.each(["pnpm test", "node -e 'console.log(1)'", "bash -c 'echo ok'"])(
     "confirm 命令走独立真人确认：%s",
     async (command) => {
@@ -290,7 +424,7 @@ describe("bash 工具 — 执行", () => {
         { command },
         {
           ...ctx(genericConfirm, undefined, false),
-          commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+          commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
         },
       );
       expect(r.status).toBe("success");
@@ -307,7 +441,7 @@ describe("bash 工具 — 执行", () => {
       { command: "pnpm test" },
       {
         ...ctx(genericConfirm, undefined, false),
-        commandAuthorization: { permissionMode: "auto", requestHumanConfirm },
+          commandAuthorization: { permissionMode: "auto", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
       },
     );
     expect(r.status).toBe("success");
@@ -319,7 +453,7 @@ describe("bash 工具 — 执行", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(false);
     const r = await executeTool(bashTool, { command: "pnpm test" }, {
       ...ctx(vi.fn().mockResolvedValue(true), undefined, false),
-      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(runArgsSpy).not.toHaveBeenCalled();
@@ -329,7 +463,7 @@ describe("bash 工具 — 执行", () => {
     const requestHumanConfirm = vi.fn().mockRejectedValue(new Error("dialog closed"));
     const r = await executeTool(bashTool, { command: "pnpm test" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(runArgsSpy).not.toHaveBeenCalled();
@@ -339,7 +473,7 @@ describe("bash 工具 — 执行", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(answer as never);
     const r = await executeTool(bashTool, { command: "pnpm test" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "confirm", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(runArgsSpy).not.toHaveBeenCalled();
@@ -349,7 +483,7 @@ describe("bash 工具 — 执行", () => {
     const requestHumanConfirm = vi.fn().mockResolvedValue(true);
     const r = await executeTool(bashTool, { command: "pnpm test" }, {
       ...ctx(undefined, undefined, false),
-      commandAuthorization: { permissionMode: "read", requestHumanConfirm },
+      commandAuthorization: { permissionMode: "read", requestHumanConfirm, authorizedReadRoots: ["/ws"] },
     });
     expect(r.status).toBe("denied");
     expect(requestHumanConfirm).not.toHaveBeenCalled();

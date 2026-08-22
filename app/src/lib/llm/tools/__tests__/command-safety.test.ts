@@ -103,6 +103,56 @@ describe("P0-01C1 命令分类与严格 grammar", () => {
   });
 });
 
+describe("P0-01C2a2 trusted ls 候选 grammar", () => {
+  it("bare ls yields a path-validation candidate, never allow", () => {
+    expect(checkCommand("ls")).toEqual({
+      verdict: "needs-path-validation",
+      reason: expect.any(String),
+      commandClass: "path-read",
+      candidate: { kind: "ls", operands: [] },
+    });
+  });
+
+  it("ls -- preserves ordered operands without authorizing them", () => {
+    expect(checkCommand("ls -- src package.json")).toEqual({
+      verdict: "needs-path-validation",
+      reason: expect.any(String),
+      commandClass: "path-read",
+      candidate: { kind: "ls", operands: ["src", "package.json"] },
+    });
+  });
+
+  it.each([
+    "ls --",
+    "ls -la",
+    "ls --color=always",
+    "ls src/*.ts",
+    "ls -- @args.rsp",
+    "ls -- -",
+    "ls -- -secret",
+    "ls -- ''",
+    "FOO=bar ls",
+  ])("rejects unsafe ls syntax: %s", (command) => {
+    const check = checkCommand(command);
+    expect(check.verdict).toBe("block");
+    expect(check).not.toHaveProperty("candidate");
+  });
+
+  it("only rejects leading tilde/response markers, not ordinary names containing them", () => {
+    expect(checkCommand("ls -- notes~today mail@host")).toMatchObject({
+      verdict: "needs-path-validation",
+      candidate: { kind: "ls", operands: ["notes~today", "mail@host"] },
+    });
+    expect(checkCommand("ls -- ~notes").verdict).toBe("block");
+    expect(checkCommand("ls -- @args.rsp").verdict).toBe("block");
+  });
+
+  it.each(["cat package.json", "head package.json", "tail package.json", "wc package.json", "grep x package.json"])(
+    "keeps other path-read commands blocked: %s",
+    (command) => expect(checkCommand(command).verdict).toBe("block"),
+  );
+});
+
 // 2026-07-15 review 修复：find 在只读白名单里但只看程序名不看参数，
 // `find . -delete` / `find -exec rm {} +` 会被当"纯只读"直接跳过确认真的删文件。
 describe("find 参数能写文件 → 不再免确认（2026-07-15 review 修复）", () => {

@@ -109,8 +109,35 @@ describe("prepareWorkspaceToolRuntime", () => {
     });
 
     const [, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
-    expect(ctxArg.commandAuthorization).toBe(commandAuthorization);
+    expect(ctxArg.commandAuthorization).toMatchObject({
+      permissionMode: "auto",
+      requestHumanConfirm,
+      authorizedReadRoots: ["/ws"],
+    });
+    expect(ctxArg.commandAuthorization).not.toBe(commandAuthorization);
     expect(ctxArg.confirm).not.toBe(requestHumanConfirm);
+  });
+
+  it("即使上游运行时恶意 cast 注入 roots，也只覆盖为当前 workspace；无 workspace 为空", async () => {
+    const malicious = {
+      permissionMode: "read" as const,
+      requestHumanConfirm: vi.fn(),
+      authorizedReadRoots: ["/Users/me/Desktop", "/Users/me"],
+    } as never;
+    await prepareWorkspaceToolRuntime({
+      workspacePath: "/ws",
+      includeWrite: true,
+      commandAuthorization: malicious,
+    });
+    let [, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(ctxArg.commandAuthorization.authorizedReadRoots).toEqual(["/ws"]);
+
+    vi.clearAllMocks();
+    mocks.createDefaultToolRegistry.mockReturnValue({ registry: true });
+    mocks.buildAiSdkTools.mockReturnValue({ read: { description: "read" } });
+    await prepareWorkspaceToolRuntime({ workspacePath: null, includeWrite: true, commandAuthorization: malicious });
+    [, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
+    expect(ctxArg.commandAuthorization.authorizedReadRoots).toEqual([]);
   });
 
   it("绑了工作区时也透传 askUser 回调到 ctx", async () => {

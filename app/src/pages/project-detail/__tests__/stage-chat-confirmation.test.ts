@@ -96,4 +96,18 @@ describe("StageChat command confirmation", () => {
     await expect(newTurn.requestConfirm({ toolName: "bash", summary: "late" })).resolves.toBe(false);
     expect(controller.current()).toBeNull();
   });
+
+  it("isActive 只在当前 generation 且 signal 未 abort 时为严格 true", () => {
+    const controller = createStageChatConfirmationController(vi.fn());
+    const oldAbort = new AbortController();
+    const oldTurn = controller.beginTurn(oldAbort.signal);
+    expect(oldTurn.isActive()).toBe(true);
+    const newTurn = controller.beginTurn(new AbortController().signal);
+    expect(oldTurn.isActive()).toBe(false);
+    expect(newTurn.isActive()).toBe(true);
+    oldAbort.abort();
+    expect(oldTurn.isActive()).toBe(false);
+    newTurn.finish();
+    expect(newTurn.isActive()).toBe(false);
+  });
 });
