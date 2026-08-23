@@ -1,0 +1,92 @@
+export type NetworkBlockedProgram = "curl" | "wget";
+
+export interface NetworkBlockedCase {
+  program: NetworkBlockedProgram;
+  shape: string;
+  command: string;
+}
+
+export const PROGRAMS = ["curl", "wget"] as const satisfies readonly NetworkBlockedProgram[];
+
+const PROGRAM_SHAPES = {
+  curl: [
+    { shape: "bare", command: "curl" },
+    { shape: "single URL", command: "curl https://public.example.test/ok" },
+    { shape: "standalone double dash", command: "curl --" },
+    { shape: "double dash URL", command: "curl -- https://public.example.test/ok" },
+    { shape: "unknown flag", command: "curl --not-a-real-flag https://public.example.test/" },
+    { shape: "stdin", command: "curl -" },
+    { shape: "leading environment assignment", command: "FAKE_PROXY_MARKER=1 curl https://public.example.test/" },
+    { shape: "quoted program", command: '"curl" https://public.example.test/ok' },
+    { shape: "escaped program", command: "c\\url https://public.example.test/" },
+    { shape: "absolute program", command: "/usr/bin/curl https://public.example.test/" },
+    { shape: "env wrapper", command: "/usr/bin/env curl https://public.example.test/" },
+    { shape: "glob", command: "curl *.txt" },
+    { shape: "response file", command: "curl @FAKE_NETWORK_ARGS_MARKER.rsp" },
+    { shape: "pipe", command: "curl https://public.example.test/ | echo FAKE_PIPE_MARKER" },
+    { shape: "semicolon", command: "curl https://public.example.test/ ; echo FAKE_SEMICOLON_MARKER" },
+    { shape: "redirect", command: "curl https://public.example.test/ > FAKE_OUTPUT_MARKER.txt" },
+    { shape: "command substitution", command: "curl $(echo FAKE_SUBSTITUTION_MARKER)" },
+    { shape: "IPv4-mapped IPv6 loopback", command: "curl http://[::ffff:127.0.0.1]:8080/" },
+    { shape: "credentials", command: "curl https://FAKE_USER_MARKER:FAKE_PASSWORD_MARKER@public.example.test/" },
+    { shape: "multiple URLs", command: "curl https://one.example.test/ https://two.example.test/" },
+    { shape: "redirect option", command: "curl --location --max-redirs 9 https://redirect.example.test/FAKE_REDIRECT_MARKER" },
+    { shape: "proxy option", command: "curl --proxy http://proxy.example.test:8080 https://public.example.test/" },
+    { shape: "no proxy option", command: "curl --noproxy '*' https://public.example.test/" },
+    { shape: "config option", command: "curl --config FAKE_CURLRC_MARKER.conf https://public.example.test/" },
+    { shape: "netrc option", command: "curl --netrc-file FAKE_NETRC_MARKER.conf https://public.example.test/" },
+    { shape: "cookie option", command: "curl --cookie 'FAKE_COOKIE_MARKER=1' https://public.example.test/" },
+    { shape: "header option", command: "curl --header 'Authorization: Bearer FAKE_NETWORK_TOKEN_MARKER' https://public.example.test/" },
+    { shape: "user option", command: "curl --user FAKE_USER_MARKER:FAKE_PASSWORD_MARKER https://public.example.test/" },
+    { shape: "output option", command: "curl --output FAKE_OUTPUT_MARKER.txt https://public.example.test/" },
+    { shape: "data option", command: "curl -d 'FAKE_POST_BODY_MARKER' https://public.example.test/upload" },
+    { shape: "form option", command: "curl -F 'field=FAKE_FORM_MARKER' https://public.example.test/upload" },
+    { shape: "upload option", command: "curl --upload-file FAKE_UPLOAD_MARKER.txt https://public.example.test/upload" },
+    { shape: "data-binary response file", command: "curl --data-binary @FAKE_UPLOAD_MARKER.txt https://public.example.test/upload" },
+    { shape: "resolve option", command: "curl --resolve public.example.test:443:192.0.2.123 https://public.example.test/FAKE_RESOLVE_MARKER" },
+    { shape: "connect-to option", command: "curl --connect-to public.example.test:443:connect-target.example.test:8443 https://public.example.test/" },
+    { shape: "insecure option", command: "curl --insecure https://public.example.test/" },
+  ],
+  wget: [
+    { shape: "bare", command: "wget" },
+    { shape: "single URL", command: "wget https://public.example.test/ok" },
+    { shape: "standalone double dash", command: "wget --" },
+    { shape: "double dash URL", command: "wget -- https://public.example.test/ok" },
+    { shape: "unknown flag", command: "wget --not-a-real-flag https://public.example.test/" },
+    { shape: "stdin", command: "wget -" },
+    { shape: "leading environment assignment", command: "FAKE_PROXY_MARKER=1 wget https://public.example.test/" },
+    { shape: "quoted program", command: '"wget" https://public.example.test/ok' },
+    { shape: "escaped program", command: "w\\get https://public.example.test/" },
+    { shape: "absolute program", command: "/usr/bin/wget https://public.example.test/" },
+    { shape: "env wrapper", command: "/usr/bin/env wget https://public.example.test/" },
+    { shape: "glob", command: "wget *.txt" },
+    { shape: "response file", command: "wget @FAKE_NETWORK_ARGS_MARKER.rsp" },
+    { shape: "pipe", command: "wget https://public.example.test/ | echo FAKE_PIPE_MARKER" },
+    { shape: "semicolon", command: "wget https://public.example.test/ ; echo FAKE_SEMICOLON_MARKER" },
+    { shape: "redirect", command: "wget https://public.example.test/ > FAKE_OUTPUT_MARKER.txt" },
+    { shape: "command substitution", command: "wget $(echo FAKE_SUBSTITUTION_MARKER)" },
+    { shape: "IPv4-mapped IPv6 loopback", command: "wget http://[::ffff:127.0.0.1]:8080/" },
+    { shape: "credentials", command: "wget https://FAKE_USER_MARKER:FAKE_PASSWORD_MARKER@public.example.test/" },
+    { shape: "multiple URLs", command: "wget https://one.example.test/ https://two.example.test/" },
+    { shape: "redirect option", command: "wget --max-redirect=9 https://redirect.example.test/FAKE_REDIRECT_MARKER" },
+    { shape: "proxy option", command: "wget --execute=use_proxy=yes https://public.example.test/" },
+    { shape: "no proxy option", command: "wget --no-proxy https://public.example.test/" },
+    { shape: "config option", command: "wget --config=FAKE_WGETRC_MARKER.conf https://public.example.test/" },
+    { shape: "input file option", command: "wget --input-file=FAKE_INPUT_URLS_MARKER.txt" },
+    { shape: "post file option", command: "wget --post-file=FAKE_UPLOAD_MARKER.txt https://public.example.test/upload" },
+    { shape: "post data option", command: "wget --post-data=FAKE_POST_BODY_MARKER https://public.example.test/upload" },
+    { shape: "header option", command: "wget --header='Authorization: Bearer FAKE_NETWORK_TOKEN_MARKER' https://public.example.test/" },
+    { shape: "user option", command: "wget --user=FAKE_USER_MARKER --password=FAKE_PASSWORD_MARKER https://public.example.test/" },
+    { shape: "cookies option", command: "wget --load-cookies=FAKE_COOKIE_MARKER.txt https://public.example.test/" },
+    { shape: "output option", command: "wget --output-document=FAKE_OUTPUT_MARKER.txt https://public.example.test/" },
+    { shape: "directory option", command: "wget --directory-prefix=FAKE_OUTPUT_DIRECTORY_MARKER https://public.example.test/" },
+    { shape: "recursive option", command: "wget --recursive https://public.example.test/" },
+    { shape: "mirror option", command: "wget --mirror https://public.example.test/" },
+    { shape: "insecure option", command: "wget --no-check-certificate https://public.example.test/" },
+    { shape: "timeout option", command: "wget --timeout=99 https://public.example.test/" },
+  ],
+} satisfies Record<NetworkBlockedProgram, readonly { shape: string; command: string }[]>;
+
+export const NETWORK_BLOCKED_CASES: readonly NetworkBlockedCase[] = PROGRAMS.flatMap((program) =>
+  PROGRAM_SHAPES[program].map(({ shape, command }) => ({ program, shape, command })),
+);
