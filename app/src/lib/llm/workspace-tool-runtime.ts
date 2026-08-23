@@ -1,6 +1,5 @@
 import type { Tool } from "ai";
 import { buildAiSdkTools, createDefaultToolRegistry, ToolRegistry, type ToolConfirmRequest, type AskUserRequest, type CommandAuthorizationInput } from "./tools";
-import { webFetchTool } from "./tools/web-fetch-tool";
 import { rememberTool } from "./tools/memory-tool";
 import { askUserTool } from "./tools/ask-user-tool";
 import { buildWorkspacePreamble } from "./prompts/workspace-context";
@@ -59,14 +58,13 @@ export async function prepareWorkspaceToolRuntime(
   // 给了也是白给——provider 大概率会因为带了 tools 参数直接 400，不如干脆不传。
   const toolCallDisabled = options.modelName !== undefined && getModelToolCallSupport(options.modelName) === false;
 
-  // 没绑工作区：文件/命令类工具没有根目录可用，但 web_fetch（联网）和 remember（记忆）
-  // 不依赖 workspacePath，不该被连坐一起消失——纯聊天模式下也该给这两个。
+  // 没绑工作区：文件/命令类工具没有根目录可用，但 remember（记忆）
+  // 不依赖 workspacePath，不该被连坐一起消失——纯聊天模式下也该给它。
   if (!options.workspacePath) {
     if (toolCallDisabled) return { tools: undefined, workspacePreamble: null };
     let tools: Record<string, Tool> | undefined;
     try {
       const registry = new ToolRegistry();
-      registry.register(webFetchTool);
       registry.register(askUserTool);
       if (options.conversationId) registry.register(rememberTool);
       await registerEnabledMcpTools(registry, {
