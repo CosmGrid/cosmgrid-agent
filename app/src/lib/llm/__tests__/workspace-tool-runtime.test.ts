@@ -17,7 +17,7 @@ vi.mock("../tools", async (importOriginal) => {
   return {
     ...actual,
     // 只替换 createDefaultToolRegistry/buildAiSdkTools（有工作区分支用），ToolRegistry 保留真实实现——
-    // 没绑工作区的新分支（2026-07-05）直接 new ToolRegistry() 注册 web_fetch/remember，
+    // 没绑工作区的新分支（2026-07-05）直接 new ToolRegistry() 注册 remember，
     // 假的类会在真实代码路径里被 new 出来，必须是能跑的真类，不能被 vi.fn() 顶掉。
     buildAiSdkTools: mocks.buildAiSdkTools,
     createDefaultToolRegistry: mocks.createDefaultToolRegistry,
@@ -44,10 +44,10 @@ describe("prepareWorkspaceToolRuntime", () => {
     expect(runtime.workspacePreamble).toBeNull();
     expect(mocks.createDefaultToolRegistry).not.toHaveBeenCalled();
     expect(mocks.buildWorkspacePreamble).not.toHaveBeenCalled();
-    // buildAiSdkTools 仍会被调用一次——用真实 ToolRegistry 只装 web_fetch/ask_user_question（无 conversationId 时不装 remember）
+    // buildAiSdkTools 仍会被调用一次——用真实 ToolRegistry 只装 ask_user_question（无 conversationId 时不装 remember）
     expect(mocks.buildAiSdkTools).toHaveBeenCalledTimes(1);
     const [registryArg, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
-    expect(registryArg.has("web_fetch")).toBe(true);
+    expect(registryArg.has("web_fetch")).toBe(false);
     expect(registryArg.has("ask_user_question")).toBe(true);
     expect(registryArg.has("remember")).toBe(false);
     expect(ctxArg).toMatchObject({ workspacePath: "" });
@@ -61,7 +61,7 @@ describe("prepareWorkspaceToolRuntime", () => {
     expect(ctxArg.askUser).toBe(askUser);
   });
 
-  it("没有 workspacePath 但有 conversationId 时，web_fetch + remember 都装", async () => {
+  it("没有 workspacePath 但有 conversationId 时，仅 remember 装载", async () => {
     await prepareWorkspaceToolRuntime({
       workspacePath: null,
       includeWrite: true,
@@ -70,7 +70,7 @@ describe("prepareWorkspaceToolRuntime", () => {
     });
 
     const [registryArg, ctxArg] = mocks.buildAiSdkTools.mock.calls[0]!;
-    expect(registryArg.has("web_fetch")).toBe(true);
+    expect(registryArg.has("web_fetch")).toBe(false);
     expect(registryArg.has("remember")).toBe(true);
     expect(ctxArg).toMatchObject({ workspacePath: "", conversationId: "conv-1", messageId: "msg-1" });
   });

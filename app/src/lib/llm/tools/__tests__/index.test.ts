@@ -31,7 +31,7 @@ describe("createDefaultToolRegistry", () => {
     expect(r.has("glob")).toBe(true);
     expect(r.has("grep")).toBe(true);
     expect(r.has("git_read")).toBe(true);
-    expect(r.has("web_fetch")).toBe(true);
+    expect(r.has("web_fetch")).toBe(false);
     expect(r.has("web_search")).toBe(true);
     expect(r.has("todo_write")).toBe(true);
     expect(r.has("ask_user_question")).toBe(true);
@@ -42,7 +42,7 @@ describe("createDefaultToolRegistry", () => {
     expect(r.has("view_image")).toBe(true);
     // 2026-07-14 加 skill 工具（真 Skill 渐进披露的调用入口），总数 12 → 13
     expect(r.has("skill")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(14);
+    expect(r.listReadOnly()).toHaveLength(13);
   });
 });
 
@@ -60,7 +60,8 @@ describe("createDefaultToolRegistry — OMO-7 capability guardrail", () => {
     __setLimitMapForTest(null, null, new Map());
     const r = createDefaultToolRegistry({ modelName: "unknown-model" });
     expect(r.has("read")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(14);
+    expect(r.has("web_fetch")).toBe(false);
+    expect(r.listReadOnly()).toHaveLength(13);
   });
 
   it("modelName 明确不支持视觉（vision===false）→ 只不注册 view_image，其余工具正常", () => {
@@ -68,14 +69,16 @@ describe("createDefaultToolRegistry — OMO-7 capability guardrail", () => {
     const r = createDefaultToolRegistry({ modelName: "no-vision-model" });
     expect(r.has("view_image")).toBe(false);
     expect(r.has("read")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(13);
+    expect(r.has("web_fetch")).toBe(false);
+    expect(r.listReadOnly()).toHaveLength(12);
   });
 
   it("没传 modelName → 不受能力表影响，照常全量注册", () => {
     __setLimitMapForTest(null, null, new Map([["some-model", false]]), new Map([["some-model", false]]));
     const r = createDefaultToolRegistry();
     expect(r.has("view_image")).toBe(true);
-    expect(r.listReadOnly()).toHaveLength(14);
+    expect(r.has("web_fetch")).toBe(false);
+    expect(r.listReadOnly()).toHaveLength(13);
   });
 });
 
@@ -83,8 +86,8 @@ describe("buildAiSdkTools", () => {
   it("每个工具转成带 description 的 AI SDK tool", () => {
     const tools = buildAiSdkTools(createDefaultToolRegistry(), ctx);
     // remember（3.1 修复）始终注册，不分只读/写——它自己走 confirm 审批，不受权限档位过滤。
-    // 2026-07-09 加 view_image，工具集合从 11 → 12；2026-07-14 加 skill，12 → 13；
-    // 2026-07-15 加 report_no_changes_needed（execute 阶段合法零工具调用逃生舱），13 → 14
+    // 2026-07-09 加 view_image，工具集合从 10 → 11；2026-07-14 加 skill，11 → 12；
+    // 2026-07-15 加 report_no_changes_needed（execute 阶段合法零工具调用逃生舱），12 → 13
     expect(Object.keys(tools).sort()).toEqual([
       "ask_user_question",
       "git_read",
@@ -99,7 +102,6 @@ describe("buildAiSdkTools", () => {
       "skill",
       "todo_write",
       "view_image",
-      "web_fetch",
       "web_search",
     ]);
     expect(tools.read!.description).toContain("读取");
@@ -111,5 +113,10 @@ describe("buildAiSdkTools", () => {
     const out = await (tools.read!.execute as any)({ file_path: "a.ts" }, {});
     expect(typeof out).toBe("string");
     expect(out).toContain("hello");
+  });
+
+  it("includeWrite 和模型变体均不注册 web_fetch", () => {
+    const tools = buildAiSdkTools(createDefaultToolRegistry({ includeWrite: true, modelName: "unknown-model" }), ctx);
+    expect(tools.web_fetch).toBeUndefined();
   });
 });
