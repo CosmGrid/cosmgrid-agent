@@ -4,6 +4,7 @@ import { checkCommand, firstProgram, isPureReadCommand, isReadOnlyCommand, tryPa
 import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 import { getCommandClass } from "@/lib/policy/command-program-spec";
 import { PATH_READ_BLOCKED_CASES } from "./path-read-block-matrix";
+import { PATH_WRITE_BLOCKED_CASES } from "./path-write-block-matrix";
 
 describe("firstProgram", () => {
   it("取首个程序名", () => {
@@ -173,6 +174,32 @@ describe("P0-01C2a3 cat/head/tail/wc 全部 argv 继续阻断", () => {
     expect(checkCommand(command)).toMatchObject({ verdict: "block", commandClass: "path-read" });
     expect(checkCommand(command)).not.toHaveProperty("candidate");
   });
+});
+
+describe("P0-01C3 mkdir/touch/cp/mv/sed 全部 argv 阻断", () => {
+  it("共享矩阵精确覆盖 98 条且 command 唯一", () => {
+    expect(PATH_WRITE_BLOCKED_CASES).toHaveLength(98);
+    expect(new Set(PATH_WRITE_BLOCKED_CASES.map(({ command }) => command)).size).toBe(98);
+  });
+
+  it.each(PATH_WRITE_BLOCKED_CASES)("$program $shape: $command", ({ command, shape }) => {
+    const check = checkCommand(command);
+    expect(check.verdict).toBe("block");
+    expect(check).not.toHaveProperty("candidate");
+    if (!["glob", "response file", "shell pipe", "redirect", "command substitution"].includes(shape)) {
+      expect(check.commandClass).toBe("path-write");
+    }
+  });
+
+  it.each(["mkdir /tmp/out", "touch /tmp/out", "cp source.txt /tmp/out", "mv source.txt /tmp/out", "sed -i 's/a/b/' file.txt"])(
+    "canonical path-write command remains classified path-write: %s",
+    (command) => expect(checkCommand(command)).toMatchObject({ verdict: "block", commandClass: "path-write" }),
+  );
+
+  it.each(["m\\kdir /tmp/out", "t\\ouch /tmp/out", "c\\p source.txt /tmp/out", "m\\v source.txt /tmp/out", "s\\ed -i 's/a/b/' file.txt"])(
+    "escaped path-write command remains classified path-write: %s",
+    (command) => expect(checkCommand(command)).toMatchObject({ verdict: "block", commandClass: "path-write" }),
+  );
 });
 
 // 2026-07-15 review 修复：find 在只读白名单里但只看程序名不看参数，
