@@ -16,7 +16,7 @@ export const SENSITIVE_PATH_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /(^|\/)\.env(\.|$|\/)/i,
   /(^|\/)secrets?\.[^/]+$/i,
   /(^|\/)keystore\.json$/i,
-  /(^|\/)id_rsa(\.|$)/i,
+  /(^|\/)id_rsa[^/]*(\/|$)/i,
 ]);
 
 /** 命中任一 pattern → true。保留具名函数让原模块继续高内聚。 */

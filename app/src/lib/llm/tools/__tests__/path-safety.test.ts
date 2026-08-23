@@ -38,6 +38,64 @@ describe("resolveInWorkspace", () => {
 });
 
 describe("checkPath — 边界", () => {
+  it("strict 模式拒绝缺少 resolver、目标或 workspace canonical 的路径", async () => {
+    expect((await checkPath(WS, "src/auth.ts", { requireRealpath: true })).ok).toBe(false);
+    expect((await checkPath(WS, "src/auth.ts", {
+      requireRealpath: true,
+      realpathFn: () => { throw new Error("target reject"); },
+    })).ok).toBe(false);
+    expect((await checkPath(WS, "src/auth.ts", {
+      requireRealpath: true,
+      realpathFn: (p) => p === WS ? (() => { throw new Error("workspace reject"); })() : p,
+    })).ok).toBe(false);
+  });
+
+  it("strict 模式先拒绝字面敏感路径，不调用 resolver", async () => {
+    let resolverCalls = 0;
+    const r = await checkPath(WS, ".env", {
+      requireRealpath: true,
+      realpathFn: (p) => { resolverCalls++; return p; },
+    });
+    expect(r.ok).toBe(false);
+    expect(resolverCalls).toBe(0);
+  });
+
+  it("边界与敏感比较兼容反斜杠、Windows drive 与 extended path，且保留 resolver 原始 resolved", async () => {
+    const workspace = "C:\\Work\\Project";
+    const canonical = "\\\\?\\C:\\Work\\Project\\src\\ok.ts";
+    const r = await checkPath(workspace, "src\\ok.ts", {
+      requireRealpath: true,
+      realpathFn: (p) => p === "C:/Work/Project/src/ok.ts"
+        ? canonical
+        : "C:/Work/Project",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.resolved).toBe(canonical);
+    expect((await checkPath(workspace, "C:\\Work\\Project\\.env", {
+      requireRealpath: true,
+      realpathFn: (p) => p,
+    })).ok).toBe(false);
+  });
+
+  it("UNC 与 extended UNC 目标支持内部边界并拒绝同前缀 sibling", async () => {
+    const workspace = "\\\\server\\share\\project";
+    const resolver = (p: string) => p === "//server/share/project"
+      ? "\\\\?\\UNC\\server\\share\\project"
+      : p === "//server/share/project/src/ok.ts"
+        ? "\\\\?\\UNC\\server\\share\\project\\src\\ok.ts"
+        : p;
+    expect((await checkPath(workspace, "src/ok.ts", { requireRealpath: true, realpathFn: resolver })).ok).toBe(true);
+    expect((await checkPath(workspace, "//server/share/project-other/x.ts", { requireRealpath: true, realpathFn: resolver })).ok).toBe(false);
+  });
+
+  it("strict canonical 敏感目标即使名称安全也拒绝", async () => {
+    const r = await checkPath(WS, "safe-link", {
+      requireRealpath: true,
+      realpathFn: (p) => p === WS ? p : `${WS}/.ssh/id_rsa_backup`,
+    });
+    expect(r.ok).toBe(false);
+  });
+
   it("工作区内允许", async () => {
     expect((await checkPath(WS, "src/auth.ts")).ok).toBe(true);
   });
@@ -87,6 +145,8 @@ describe("isSensitivePath / checkPath — 敏感路径", () => {
     ".GnuPG/secring.gpg",
     "KEYSTORE.JSON",
     "ID_RSA.pub",
+    "id_rsa_backup",
+    "id_rsa_backup/key",
   ])("大小写变体也应该被拒绝（此前会绕过黑名单）：%s", async (p) => {
     expect((await checkPath(WS, p)).ok).toBe(false);
   });

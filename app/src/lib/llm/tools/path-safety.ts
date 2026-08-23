@@ -41,9 +41,20 @@ export function getDefaultRealpathFn(): RealpathFn | undefined {
 }
 
 /** 规范化路径：拆 / 与 \，处理 . 与 ..，不依赖 node path（浏览器环境也能跑） */
+function stripWindowsExtendedPrefix(p: string): string {
+  if (p.startsWith("\\\\?\\UNC\\") || p.startsWith("//?/UNC/")) return `//${p.slice(8)}`;
+  if (p.startsWith("\\\\?\\") || p.startsWith("//?/")) return p.slice(4);
+  return p;
+}
+
 export function normalizePath(p: string): string {
-  const isAbs = p.startsWith("/");
-  const parts = p.split(/[/\\]+/);
+  const input = stripWindowsExtendedPrefix(p);
+  const drive = input.match(/^[A-Za-z]:(?=[/\\]|$)/)?.[0] ?? "";
+  const isUnc = input.startsWith("//") || input.startsWith("\\\\");
+  const isAbs = input.startsWith("/") || input.startsWith("\\") || Boolean(drive);
+  const root = drive || (isUnc ? "//" : isAbs ? "/" : "");
+  const remainder = drive ? input.slice(2) : input;
+  const parts = remainder.split(/[/\\]+/);
   const stack: string[] = [];
   for (const seg of parts) {
     if (seg === "" || seg === ".") continue;
@@ -55,20 +66,22 @@ export function normalizePath(p: string): string {
       stack.push(seg);
     }
   }
-  return (isAbs ? "/" : "") + stack.join("/");
+  return root + (root && stack.length > 0 && !root.endsWith("/") ? "/" : "") + stack.join("/");
 }
 
 /** 把可能是相对的目标路径，按 workspace 解析成规范绝对路径 */
 export function resolveInWorkspace(workspacePath: string, target: string): string {
   const ws = normalizePath(workspacePath);
-  if (target.startsWith("/")) return normalizePath(target);
+  if (/^(?:[A-Za-z]:[\\/]|[\\/]{1,2})/.test(target)) return normalizePath(target);
   return normalizePath(`${ws}/${target}`);
 }
 
 // 敏感路径模式（命中即拒绝读写）—— 实际正则已搬到 lib/security-invariants/sensitive-paths.ts（阶段 3 R7 集中）。
 import { isSensitivePath as isSensitivePathCore } from "@/lib/security-invariants/sensitive-paths";
 
-export const isSensitivePath = isSensitivePathCore;
+export function isSensitivePath(p: string): boolean {
+  return isSensitivePathCore(normalizePath(p));
+}
 
 export interface PathCheck {
   ok: boolean;
@@ -84,6 +97,8 @@ export interface PathCheckOptions {
    * - 传函数：用该函数解析
    */
   realpathFn?: RealpathFn | null;
+  /** Existing paths must resolve completely; parent-directory fallback is not accepted. */
+  requireRealpath?: boolean;
 }
 
 /** 拆出路径的父目录和文件名（不依赖 node path，浏览器环境也能跑）。 */
@@ -91,6 +106,19 @@ function splitDirBase(p: string): { dir: string; base: string } {
   const idx = p.lastIndexOf("/");
   if (idx < 0) return { dir: "", base: p };
   return { dir: idx === 0 ? "/" : p.slice(0, idx), base: p.slice(idx + 1) };
+}
+
+function comparablePath(p: string): string {
+  const normalized = normalizePath(p).replace(/\/$/, "");
+  return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith("//")
+    ? normalized.toLowerCase()
+    : normalized;
+}
+
+function isWithinWorkspace(workspace: string, candidate: string): boolean {
+  const ws = comparablePath(workspace);
+  const resolved = comparablePath(candidate);
+  return resolved === ws || resolved.startsWith(`${ws}/`);
 }
 
 /**
@@ -120,17 +148,19 @@ async function resolveBoth(
   wsRaw: string,
   initialResolved: string,
   options: PathCheckOptions | undefined,
-): Promise<{ ws: string; resolved: string }> {
+): Promise<{ ws: string; resolved: string; resolverExists: boolean; targetCanonical: boolean; workspaceCanonical: boolean }> {
   const fn = options?.realpathFn === null
     ? undefined
     : options?.realpathFn ?? defaultRealpathFn;
-  if (!fn) return { ws: wsRaw, resolved: initialResolved };
+  if (!fn) return { ws: wsRaw, resolved: initialResolved, resolverExists: false, targetCanonical: false, workspaceCanonical: false };
 
   let resolved = initialResolved;
   let resolvedSucceeded = false;
+  let targetCanonical = false;
   try {
     resolved = await fn(initialResolved);
     resolvedSucceeded = true;
+    targetCanonical = true;
   } catch {
     const { dir, base } = splitDirBase(initialResolved);
     if (dir) {
@@ -145,17 +175,20 @@ async function resolveBoth(
   }
 
   let ws = wsRaw;
+  let workspaceCanonical = false;
   if (resolvedSucceeded) {
     // resolved（或其父目录）解析成功 → ws 也解析（保证两者都是 realpath 形式）
     try {
       ws = await fn(wsRaw);
+      workspaceCanonical = true;
     } catch {
       // ws 解析失败——两边都退回 raw 保证形式一致，不能一边 realpath 一边 raw 去比较。
       ws = wsRaw;
       resolved = initialResolved;
+      targetCanonical = false;
     }
   }
-  return { ws, resolved };
+  return { ws, resolved, resolverExists: true, targetCanonical, workspaceCanonical };
 }
 
 /**
@@ -173,10 +206,18 @@ export async function checkPath(
 ): Promise<PathCheck> {
   const wsRaw = normalizePath(workspacePath);
   const initialResolved = resolveInWorkspace(workspacePath, target);
+  // Strict walker calls must reject the user spelling before any resolver call.
+  if (options.requireRealpath && isSensitivePath(initialResolved)) {
+    return { ok: false, resolved: initialResolved, reason: `拒绝访问敏感路径：${initialResolved}` };
+  }
   // 2.2 修复：ws 和 resolved 同步解析，保证形式一致（macOS /var 等差异也覆盖）
-  const { ws, resolved } = await resolveBoth(wsRaw, initialResolved, options);
+  const { ws, resolved, resolverExists, targetCanonical, workspaceCanonical } = await resolveBoth(wsRaw, initialResolved, options);
 
-  if (resolved !== ws && !resolved.startsWith(ws + "/")) {
+  if (options.requireRealpath && (!resolverExists || !targetCanonical || !workspaceCanonical)) {
+    return { ok: false, resolved, reason: "路径无法完成严格解析" };
+  }
+
+  if (!isWithinWorkspace(ws, resolved)) {
     return { ok: false, resolved, reason: `路径越出工作区边界：${resolved}` };
   }
   if (isSensitivePath(resolved)) {
@@ -213,6 +254,6 @@ export async function checkWritePath(
   if (isSensitivePath(resolved)) {
     return { ok: false, resolved, reason: `拒绝访问敏感路径：${resolved}`, external: false };
   }
-  const external = resolved !== ws && !resolved.startsWith(ws + "/");
+  const external = !isWithinWorkspace(ws, resolved);
   return { ok: true, resolved, external };
 }
