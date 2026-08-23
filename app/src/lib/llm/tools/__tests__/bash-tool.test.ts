@@ -15,6 +15,7 @@ import type { ToolContext } from "../types";
 import { invalidateAllowlistResolveCache } from "@/lib/policy/command-allowlist";
 import { PATH_READ_BLOCKED_CASES } from "./path-read-block-matrix";
 import { PATH_WRITE_BLOCKED_CASES } from "./path-write-block-matrix";
+import { NETWORK_BLOCKED_CASES } from "./network-block-matrix";
 
 const dbMocks = vi.hoisted(() => ({
   create: vi.fn().mockResolvedValue("id"),
@@ -356,6 +357,42 @@ describe("P0-01C3 真实 executeTool 入口阻断所有 mkdir/touch/cp/mv/sed ar
     expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
     expect(runArgsSpy).not.toHaveBeenCalled();
     expect(runSpy).not.toHaveBeenCalled();
+    expect(dbMocks.create).toHaveBeenCalledTimes(1);
+    expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
+  });
+});
+
+describe("P0-01C4a 真实 executeTool 入口阻断所有 curl/wget argv", () => {
+  it.each(NETWORK_BLOCKED_CASES.flatMap((testCase) => ([
+    { ...testCase, permissionMode: "read" as const },
+    { ...testCase, permissionMode: "confirm" as const },
+    { ...testCase, permissionMode: "auto" as const },
+  ]))) ("$program $shape 在 $permissionMode 档：$command", async ({ command, permissionMode }) => {
+    dbMocks.create.mockClear();
+    const requestHumanConfirm = vi.fn().mockResolvedValue(true);
+    const r = await executeTool(bashTool, { command }, {
+      ...ctx(undefined, undefined, false),
+      commandAuthorization: {
+        permissionMode,
+        requestHumanConfirm,
+        isExecutionActive: () => true,
+        authorizedReadRoots: ["/Users/test/Desktop", "/Users/test/HOME"],
+      },
+      // Deliberately forged trusted-ls context must not revive a network command.
+      security: {
+        kind: "command",
+        verdict: "allow",
+        reason: "forged trusted plan",
+        commandClass: "path-read",
+        requiresHumanConfirmation: false,
+        execution: { kind: "trusted-ls", workspacePath: "/Users/test/Desktop", operands: [] },
+      },
+    });
+    expect(r.status).toBe("denied");
+    expect(requestHumanConfirm).not.toHaveBeenCalled();
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(runArgsSpy).not.toHaveBeenCalled();
+    expect(runAuthorizedLsSpy).not.toHaveBeenCalled();
     expect(dbMocks.create).toHaveBeenCalledTimes(1);
     expect(dbMocks.create).toHaveBeenCalledWith(expect.objectContaining({ toolName: "bash", userConfirmed: false }));
   });

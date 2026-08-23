@@ -5,6 +5,7 @@ import { BUILTIN_ALLOWED_PROGRAMS } from "@/lib/policy/command-allowlist";
 import { getCommandClass } from "@/lib/policy/command-program-spec";
 import { PATH_READ_BLOCKED_CASES } from "./path-read-block-matrix";
 import { PATH_WRITE_BLOCKED_CASES } from "./path-write-block-matrix";
+import { NETWORK_BLOCKED_CASES } from "./network-block-matrix";
 
 describe("firstProgram", () => {
   it("取首个程序名", () => {
@@ -200,6 +201,40 @@ describe("P0-01C3 mkdir/touch/cp/mv/sed 全部 argv 阻断", () => {
     "escaped path-write command remains classified path-write: %s",
     (command) => expect(checkCommand(command)).toMatchObject({ verdict: "block", commandClass: "path-write" }),
   );
+});
+
+describe("P0-01C4a curl/wget 全部 argv 阻断", () => {
+  it("共享矩阵精确覆盖 72 条且 command 全局唯一", () => {
+    expect(NETWORK_BLOCKED_CASES).toHaveLength(72);
+    expect(new Set(NETWORK_BLOCKED_CASES.map(({ command }) => command)).size).toBe(72);
+  });
+
+  it.each(NETWORK_BLOCKED_CASES)("$program $shape: $command", ({ command, shape }) => {
+    const check = checkCommand(command);
+    expect(check.verdict).toBe("block");
+    expect(check).not.toHaveProperty("candidate");
+    if (["glob", "response file", "pipe", "semicolon", "redirect", "command substitution", "data-binary response file"].includes(shape)) {
+      expect(check.commandClass).toBeUndefined();
+    } else if (shape === "env wrapper") {
+      expect(check.commandClass).toBeUndefined();
+      expect(check.reason).toContain("被安全策略禁止");
+      expect(check.reason).toContain("/usr/bin/env");
+    } else if (shape === "absolute program") {
+      expect(check.commandClass).toBeUndefined();
+    } else {
+      expect(check.commandClass).toBe("network");
+    }
+  });
+
+  it.each([
+    "curl https://public.example.test/FAKE_CANONICAL_CURL_MARKER",
+    "wget https://public.example.test/FAKE_CANONICAL_WGET_MARKER",
+    "c\\url https://public.example.test/FAKE_ESCAPED_CURL_MARKER",
+    "w\\get https://public.example.test/FAKE_ESCAPED_WGET_MARKER",
+  ])("canonical/escaped network sentinel remains strict network block: %s", (command) => {
+    expect(checkCommand(command)).toMatchObject({ verdict: "block", commandClass: "network" });
+    expect(checkCommand(command)).not.toHaveProperty("candidate");
+  });
 });
 
 // 2026-07-15 review 修复：find 在只读白名单里但只看程序名不看参数，
