@@ -2,6 +2,7 @@
 
 import ignore, { type Ignore } from "ignore";
 import { getFsAdapter, type FsAdapter } from "./fs-adapter";
+import { checkPath, isSensitivePath } from "./path-safety";
 
 /** 默认忽略的目录（不下钻，省时省内存）。即使没有 .gitignore 也兜底剪掉这些重目录。 */
 const DEFAULT_IGNORE_DIRS = new Set([
@@ -11,16 +12,95 @@ const DEFAULT_IGNORE_DIRS = new Set([
 /** 读取工作区根的 .gitignore，构造匹配器。读不到就返回空匹配器（靠 DEFAULT_IGNORE_DIRS 兜底）。
  *  这样工具就和 claude code / ripgrep / opencode 一样尊重 .gitignore——
  *  否则会一头扎进 .gitignore 里排除的大目录（如本项目 23k 文件的 `技术参考/`），把文件名额耗光、搜不到真源码。 */
-async function loadGitignore(root: string, fs: FsAdapter): Promise<Ignore> {
+async function loadGitignore(workspaceRoot: string, fs: FsAdapter, strict = false): Promise<Ignore> {
   const ig = ignore();
+  const candidate = `${workspaceRoot}/.gitignore`;
+  if (isSensitivePath(candidate)) return ig;
   try {
-    if (await fs.exists(`${root}/.gitignore`)) {
-      ig.add(await fs.readTextFile(`${root}/.gitignore`));
-    }
+    const check = await checkPath(workspaceRoot, candidate, strict ? { requireRealpath: true } : {});
+    if (check.ok) ig.add(await fs.readTextFile(check.resolved));
   } catch {
-    // 没有 .gitignore / 读不了：不加规则，靠 DEFAULT_IGNORE_DIRS
+    // Missing or unsafe .gitignore: use only DEFAULT_IGNORE_DIRS.
   }
   return ig;
+}
+
+export interface SafeWalkFile {
+  relativePath: string;
+  resolvedPath: string;
+}
+
+function isValidBasename(name: string): boolean {
+  return name.length > 0 && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\");
+}
+
+/**
+ * Walk an already-resolved search root while re-checking every directory and file.
+ * Rejected descendants are intentionally silent so sensitive names are not enumerated.
+ */
+export async function walkSafeFiles(
+  workspaceRoot: string,
+  searchRoot: string,
+  maxFiles = 5000,
+): Promise<SafeWalkFile[]> {
+  const fs = getFsAdapter();
+  const rootCheck = await checkPath(workspaceRoot, searchRoot, { requireRealpath: true });
+  if (!rootCheck.ok) throw new Error("搜索根目录无法完成安全校验");
+  const workspaceCheck = await checkPath(workspaceRoot, workspaceRoot, { requireRealpath: true });
+  if (!workspaceCheck.ok) throw new Error("搜索根目录无法完成安全校验");
+
+  const ig = await loadGitignore(workspaceRoot, fs, true);
+  const out: SafeWalkFile[] = [];
+
+  const normalizedWorkspace = workspaceCheck.resolved.replace(/[\\]+/g, "/").replace(/\/$/, "");
+  const normalizedSearch = rootCheck.resolved.replace(/[\\]+/g, "/").replace(/\/$/, "");
+  const searchRel = normalizedSearch === normalizedWorkspace
+    ? ""
+    : normalizedSearch.startsWith(`${normalizedWorkspace}/`)
+      ? normalizedSearch.slice(normalizedWorkspace.length + 1)
+      : (() => { throw new Error("搜索根目录无法完成安全校验"); })();
+
+  async function recurse(canonicalDir: string, workspaceRel: string, outputRel: string): Promise<void> {
+    if (out.length >= maxFiles) return;
+    let entries;
+    try {
+      entries = await fs.readDir(canonicalDir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= maxFiles || !isValidBasename(entry.name)) continue;
+      const childWorkspaceRel = workspaceRel ? `${workspaceRel}/${entry.name}` : entry.name;
+      const childOutputRel = outputRel ? `${outputRel}/${entry.name}` : entry.name;
+      const lexical = `${workspaceRoot}/${childWorkspaceRel}`;
+      if (isSensitivePath(lexical)) continue;
+      if (entry.isDirectory === entry.isFile) continue;
+      if (entry.isDirectory) {
+        if (DEFAULT_IGNORE_DIRS.has(entry.name) || ig.ignores(`${childWorkspaceRel}/`)) continue;
+        let checked;
+        try {
+          checked = await checkPath(workspaceRoot, lexical, { requireRealpath: true });
+        } catch {
+          continue;
+        }
+        if (!checked.ok || isSensitivePath(checked.resolved)) continue;
+        await recurse(checked.resolved, childWorkspaceRel, childOutputRel);
+      } else {
+        if (ig.ignores(childWorkspaceRel)) continue;
+        let checked;
+        try {
+          checked = await checkPath(workspaceRoot, lexical, { requireRealpath: true });
+        } catch {
+          continue;
+        }
+        if (!checked.ok || isSensitivePath(checked.resolved)) continue;
+        out.push({ relativePath: childOutputRel, resolvedPath: checked.resolved });
+      }
+    }
+  }
+
+  await recurse(rootCheck.resolved, searchRel, "");
+  return out;
 }
 
 /** 把 glob 模式编译成 RegExp。支持 ** （跨目录）、* （单层任意）、? （单字符）。 */

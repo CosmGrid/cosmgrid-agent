@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { ToolDefinition } from "./types";
-import { globToRegExp, walkFiles } from "./walk";
+import { globToRegExp, walkSafeFiles } from "./walk";
 import {
   errorResult,
   successResult,
@@ -42,15 +42,15 @@ export const globTool: ToolDefinition<GlobParams> = {
     const re = globToRegExp(input.pattern);
     let files: string[];
     try {
-      files = await walkFiles(resolved);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const walked = await walkSafeFiles(ctx.workspacePath, resolved);
+      files = walked.map((file) => file.relativePath);
+    } catch {
       return errorResult({
-        output: `遍历失败：${msg}`,
-        summary: `glob 遍历失败 ${resolved}`,
+        output: "遍历失败：搜索根目录无法完成安全校验",
+        summary: "glob 遍历失败",
         error: {
           code: TOOL_UNKNOWN_ERROR,
-          rootCauseHint: msg,
+          rootCauseHint: "搜索根目录无法完成安全校验",
           retryable: false,
           stopCondition: "确认工作区根目录存在且有读权限",
         },

@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "./types";
 import { getFsAdapter } from "./fs-adapter";
-import { globToRegExp, walkFiles } from "./walk";
+import { globToRegExp, walkSafeFiles, type SafeWalkFile } from "./walk";
 import {
   errorResult,
   successResult,
@@ -60,17 +60,16 @@ export const grepTool: ToolDefinition<GrepParams> = {
     const includeRe = input.include ? globToRegExp(input.include) : null;
 
     const fs = getFsAdapter();
-    let files: string[];
+    let walked: SafeWalkFile[];
     try {
-      files = await walkFiles(resolved);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      walked = await walkSafeFiles(ctx.workspacePath, resolved);
+    } catch {
       return errorResult({
-        output: `遍历失败：${msg}`,
-        summary: `grep 遍历失败 ${resolved}`,
+        output: "遍历失败：搜索根目录无法完成安全校验",
+        summary: "grep 遍历失败",
         error: {
           code: TOOL_UNKNOWN_ERROR,
-          rootCauseHint: msg,
+          rootCauseHint: "搜索根目录无法完成安全校验",
           retryable: false,
         },
       });
@@ -78,21 +77,23 @@ export const grepTool: ToolDefinition<GrepParams> = {
 
     const matches: string[] = [];
     let scannedFiles = 0;
-    for (const rel of files) {
+    for (const file of walked) {
+      const rel = file.relativePath;
       if (matches.length >= GREP_MAX_MATCHES) break;
       const name = rel.split("/").pop() ?? rel;
       if (includeRe && !includeRe.test(rel) && !includeRe.test(name)) continue;
       let text: string;
       try {
-        text = await fs.readTextFile(`${resolved}/${rel}`);
+        text = await fs.readTextFile(file.resolvedPath);
         scannedFiles++;
       } catch {
         continue; // 二进制/读不了的跳过
       }
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
-        if (re.test(lines[i]!)) {
-          matches.push(`${rel}:${i + 1}: ${lines[i]!.trim()}`);
+        const line = lines[i];
+        if (line !== undefined && re.test(line)) {
+          matches.push(`${rel}:${i + 1}: ${line.trim()}`);
           if (matches.length >= GREP_MAX_MATCHES) break;
         }
       }
