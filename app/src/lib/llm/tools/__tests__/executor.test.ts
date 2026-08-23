@@ -145,6 +145,31 @@ describe("executor: doom loop 拦截", () => {
 });
 
 describe("executor: 落库 result_json + error_code", () => {
+  it("audit projects known fields, redacts them, and excludes unknown/debug/parts", async () => {
+    const tool = echoTool({
+      execute: async () => ({
+        status: "success" as const,
+        summary: "summary token=summary-secret-123456",
+        output: "output sk-proj-output-secret-123456",
+        artifacts: [{ kind: "file" as const, uri: "file://?api_key=uri-secret-123456", label: "label Bearer label-secret-1234567890" }],
+        nextActions: [{ action: "token=action-secret-123456", reason: "token=reason-secret-123456", safe: true }],
+        parts: [{ type: "text", text: "nested base64 secret" }],
+        debug: { parts: [{ data: "nested base64 secret" }] },
+        unknown: "unknown-secret",
+      } as never),
+    });
+    const runtime = await executeTool(tool, { text: "x" }, ctxWithMessage("msg-audit-projection"));
+    expect(runtime.parts).toBeDefined();
+    const call = mocks.create.mock.calls[0]![0];
+    const parsed = JSON.parse(call.resultJson);
+    expect(parsed.output).toBe(call.output);
+    expect(JSON.stringify(parsed)).not.toContain("unknown-secret");
+    expect(JSON.stringify(parsed)).not.toContain("nested base64 secret");
+    expect(JSON.stringify(parsed)).not.toContain("secret-123456");
+    expect(parsed.status).toBe("success");
+    expect(parsed.artifacts[0].kind).toBe("file");
+    expect(parsed.nextActions[0].safe).toBe(true);
+  });
   it("成功执行：resultJson 是合法 ToolResultV2，errorCode=null", async () => {
     const tool = echoTool();
     await executeTool(tool, { text: "hi" }, ctxWithMessage("msg-rj-1"));

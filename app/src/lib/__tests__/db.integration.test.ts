@@ -2,6 +2,8 @@
 // 覆盖此前 0% 的表 + initSchema 全部 DDL。$N 占位符转 ? 按出现顺序绑定（支持重复 $1）。
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
+import type { AnyToolDefinition } from "../llm/tools/types";
 
 type SqlVal = string | number | bigint | null | Uint8Array;
 
@@ -1302,8 +1304,49 @@ describe("toolExecutions", () => {
     expect(byConv).toHaveLength(1);
     expect(byConv[0]!.toolName).toBe("read");
     expect(byConv[0]!.userConfirmed).toBe(true);
+    expect(byConv[0]!.resultJson).toBeNull(); // legacy rows remain readable
     const recent = await db.toolExecutions.list();
     expect(recent.some((t) => t.conversationId === conv.id)).toBe(true);
+  });
+
+  it("real executeTool audit path stores one redacted projection in both columns", async () => {
+    const { executeTool } = await import("../llm/tools/executor");
+    const conv = await db.conversations.create({ title: "c-tool-redaction" });
+    const tool: AnyToolDefinition = {
+      name: "audit-real",
+      description: "real audit path",
+      parameters: z.object({}),
+      readOnly: true,
+      security: { kind: "none" },
+      execute: async () => ({
+        status: "success" as const,
+        summary: "summary token=summary-secret-123456",
+        output: "output sk-proj-output-secret-123456",
+        artifacts: [{ kind: "file" as const, uri: "file://?api_key=uri-secret-123456", label: "label Bearer label-secret-1234567890" }],
+        nextActions: [{ action: "token=action-secret-123456", reason: "token=reason-secret-123456", safe: true }],
+        parts: [{ type: "text", text: "nested base64 should stay runtime-only" }],
+        unknown: "unknown-secret",
+      } as never),
+    };
+    const runtime = await executeTool(tool, {}, {
+      workspacePath: "/workspace",
+      conversationId: conv.id,
+      messageId: "msg-real-audit",
+    });
+    expect(runtime.parts).toBeDefined();
+
+    const rows = await db.toolExecutions.listByConversation(conv.id);
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.resultJson).toBeTruthy();
+    const parsed = JSON.parse(row.resultJson!);
+    expect(parsed.output).toBe(row.output);
+    expect(JSON.stringify(parsed)).not.toContain("unknown-secret");
+    expect(JSON.stringify(parsed)).not.toContain("nested base64 should stay runtime-only");
+    expect(JSON.stringify(parsed)).not.toContain("secret-123456");
+    expect(parsed.status).toBe("success");
+    expect(parsed.artifacts[0].kind).toBe("file");
+    expect(parsed.nextActions[0].safe).toBe(true);
   });
 });
 

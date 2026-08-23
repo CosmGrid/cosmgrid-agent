@@ -353,17 +353,64 @@ export function summarize(output: string, maxLen = 80): string {
  *     summary 里脱敏，避免泄露到下一轮 prompt。
  *  4. parts 不参与脱敏（多模态内容已经是 base64，本身不在脱敏范围）。 */
 export function truncateForContext(result: ToolResultV2, maxChars = 10_000): ToolResultV2 {
-  const clippedOutput = clipAndRedact(result.output, maxChars);
-  // summary 走一遍 kv/Bearer 脱敏（redactSecret）+ 厂商 key 前缀脱敏（redactApiKeys），
-  // 与 output 的 clipAndRedact 保持一致，避免 sk-ant- / sk-proj- / AIza / gsk_ 从摘要泄露。
-  const clippedSummary = redactApiKeys(redactSecret(result.summary));
+  return sanitizeResultV2(result, maxChars);
+}
 
-  // 不重新 redact parts（多模态不走字符串脱敏）
-  return {
-    ...result,
-    output: clippedOutput,
-    summary: clippedSummary,
+/**
+ * Create a non-mutating, explicitly projected result safe for model context or audit.
+ * Free text is redacted consistently; output is redacted before it is clipped. Unknown
+ * properties are intentionally not copied. Runtime callers retain parts by default;
+ * audit callers must opt out because parts can contain binary/base64 content.
+ */
+export function sanitizeResultV2(
+  result: ToolResultV2,
+  maxOutputChars = 10_000,
+  options: { includeParts?: boolean } = {},
+): ToolResultV2 {
+  const safe: ToolResultV2 = {
+    status: result.status,
+    summary: redactText(result.summary),
+    output: clipAndRedact(result.output, maxOutputChars),
+    artifacts: result.artifacts.map((artifact) => ({
+      ...(artifact.id !== undefined ? { id: redactText(artifact.id) } : {}),
+      kind: artifact.kind,
+      uri: redactText(artifact.uri),
+      label: redactText(artifact.label),
+      ...(artifact.exitCode !== undefined ? { exitCode: artifact.exitCode } : {}),
+      ...(artifact.external !== undefined ? { external: artifact.external } : {}),
+    })),
+    nextActions: result.nextActions.map((action) => ({
+      action: redactText(action.action),
+      reason: redactText(action.reason),
+      safe: action.safe,
+    })),
+    ...(result.error
+      ? {
+        error: {
+          code: result.error.code,
+          rootCauseHint: redactText(result.error.rootCauseHint),
+          retryable: result.error.retryable,
+          ...(result.error.retryInstruction !== undefined
+            ? { retryInstruction: redactText(result.error.retryInstruction) }
+            : {}),
+          ...(result.error.stopCondition !== undefined
+            ? { stopCondition: redactText(result.error.stopCondition) }
+            : {}),
+        },
+      }
+      : {}),
+    ...(result.reversible !== undefined ? { reversible: result.reversible } : {}),
+    ...(result.durationMs !== undefined ? { durationMs: result.durationMs } : {}),
+    ...(result.userConfirmed !== undefined ? { userConfirmed: result.userConfirmed } : {}),
+    ...(options.includeParts !== false && result.parts !== undefined
+      ? { parts: result.parts }
+      : {}),
   };
+  return safe;
+}
+
+function redactText(text: string): string {
+  return redactApiKeys(redactSecret(text));
 }
 
 /** 截断 + secret 脱敏。单独导出让 write/edit 等长输出工具复用。

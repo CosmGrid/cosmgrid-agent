@@ -21,6 +21,7 @@ import {
   redactSecret,
   readOrError,
   serializeResultV2,
+  sanitizeResultV2,
   successResult,
   summarize,
   timeoutResult,
@@ -36,6 +37,7 @@ import {
   TOOL_UNKNOWN_ERROR,
   deniedResult,
 } from "../result-contract";
+import type { ToolResultV2 } from "../result-contract";
 
 // =====================================================================
 // 1. 每种 status 都有固定 JSON 形状
@@ -287,6 +289,125 @@ describe("redactSecret: secret-like 字段被 [REDACTED] 替换", () => {
     expect(out).not.toContain("sk-1234567890");
     expect(out).toContain("[REDACTED]");
     expect(out.length).toBeLessThanOrEqual(50);
+  });
+});
+
+describe("P0-06: result clone redacts every free-text field", () => {
+  it("preserves the source and explicitly projects/redacts known fields", () => {
+    const result = {
+      status: "error" as const,
+      summary: "summary token=summary-secret-123456 sk-proj-summary-secret",
+      output: "output token=output-secret-123456 Bearer output-bearer-secret-1234567890",
+      artifacts: [{ kind: "file" as const, id: "token=artifact-secret-123456", uri: "https://x.test/?token=uri-secret-123456&api_key=uri-key-123456", label: "label sk-proj-label-secret" }],
+      nextActions: [{ action: "action token=action-secret-123456", reason: "reason api_key=reason-secret-123456", safe: true }],
+      error: {
+        code: "TOOL_UNKNOWN_ERROR",
+        rootCauseHint: "root Bearer root-secret-1234567890",
+        retryable: true,
+        retryInstruction: "retry token=retry-secret-123456",
+        stopCondition: "stop api_key=stop-secret-123456",
+      },
+      reversible: true,
+      durationMs: 12,
+      userConfirmed: false,
+      parts: [{ type: "text", text: "part-secret" }],
+      unknown: "unknown-secret",
+    } as unknown as ToolResultV2 & { unknown: string };
+    const original = structuredClone(result);
+    const safe = sanitizeResultV2(result);
+
+    expect(result).toEqual(original);
+    expect(safe).not.toHaveProperty("unknown");
+    expect(safe.parts).toEqual(result.parts);
+    expect(JSON.stringify(safe)).not.toContain("secret-123456");
+    expect(JSON.stringify(safe)).not.toContain("sk-proj-");
+    expect(JSON.stringify(safe)).toContain("[REDACTED]");
+    expect(safe.error).toMatchObject({ code: result.error?.code, retryable: true });
+    expect(safe.artifacts[0]).toMatchObject({ kind: "file", id: expect.stringContaining("[REDACTED]") });
+  });
+
+  it("redacts before truncating across the 10K boundary and preserves optional shapes", () => {
+    const secret = "sk-proj-boundary-secret-1234567890";
+    const result = successResult({
+      output: "a".repeat(9_990) + secret + "\n" + "ordinary tail ".repeat(300),
+      summary: "summary token=summary-secret-123456",
+      artifacts: [],
+      nextActions: [],
+    });
+    const safe = sanitizeResultV2(result, 10_000);
+    expect(safe.output).not.toContain(secret);
+    expect(safe.output).toContain("[REDACTED]");
+    expect(safe.output).toContain("…(truncated)");
+    expect(safe.artifacts).toEqual([]);
+    expect(safe.nextActions).toEqual([]);
+  });
+
+  it("truncateForContext uses the same redaction for nested free text", () => {
+    const result = errorResult({
+      output: "token=output-secret-123456",
+      summary: "sk-proj-summary-secret-123456",
+      parts: [{ type: "text", text: "runtime part" }],
+      error: { code: "X", rootCauseHint: "Bearer root-secret-1234567890", retryable: false, stopCondition: "api_key=stop-secret-123456" },
+      artifacts: [{ kind: "url", uri: "https://x.test/?token=uri-secret-123456", label: "sk-proj-label-secret" }],
+      nextActions: [{ action: "token=action-secret-123456", reason: "api_key=reason-secret-123456", safe: true }],
+    });
+    const original = structuredClone(result);
+    const safe = truncateForContext(result);
+    expect(JSON.stringify(safe)).not.toContain("secret-123456");
+    expect(safe.error?.code).toBe("X");
+    expect(safe.parts).toBe(result.parts);
+    expect(result).toEqual(original);
+  });
+
+  it("preserves stable fields, optional omissions, order, and no-secret round-trip", () => {
+    const result = {
+      status: "warning" as const,
+      summary: "all clear",
+      output: "ordinary output",
+      artifacts: [
+        { kind: "file" as const, id: "first", uri: "a", label: "A", exitCode: 0, external: false },
+        { kind: "url" as const, uri: "b", label: "B" },
+      ],
+      nextActions: [
+        { action: "first_action", reason: "first reason", safe: true },
+        { action: "second_action", reason: "second reason", safe: false },
+      ],
+      reversible: false,
+      durationMs: 42,
+      userConfirmed: true,
+    } satisfies ToolResultV2;
+    const safe = sanitizeResultV2(result);
+    expect(safe).toEqual(result);
+    expect(safe.artifacts.map((a) => a.label)).toEqual(["A", "B"]);
+    expect(safe.nextActions.map((a) => a.action)).toEqual(["first_action", "second_action"]);
+    expect(safe.artifacts[1]).not.toHaveProperty("id");
+    expect(safe.artifacts[1]).not.toHaveProperty("exitCode");
+    expect(safe.artifacts[1]).not.toHaveProperty("external");
+    expect(safe).not.toHaveProperty("error");
+    const parsed = deserializeResultV2(serializeResultV2(safe));
+    expect(parsed).toEqual(result);
+  });
+
+  it("preserves an error with omitted retry and stop instructions without adding fields", () => {
+    const result = errorResult({
+      output: "ordinary error",
+      summary: "ordinary summary",
+      error: {
+        code: "TOOL_UNKNOWN_ERROR",
+        rootCauseHint: "ordinary root cause",
+        retryable: false,
+      },
+    });
+    const original = structuredClone(result);
+    const safe = sanitizeResultV2(result);
+    expect(safe.error).toMatchObject({
+      code: "TOOL_UNKNOWN_ERROR",
+      rootCauseHint: "ordinary root cause",
+      retryable: false,
+    });
+    expect(safe.error).not.toHaveProperty("retryInstruction");
+    expect(safe.error).not.toHaveProperty("stopCondition");
+    expect(result).toEqual(original);
   });
 });
 
