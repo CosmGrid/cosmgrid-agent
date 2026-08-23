@@ -196,6 +196,26 @@ describe("splitSystemFromMessages（system 消息打包契约）", () => {
     ]);
     expect(rest).toEqual([{ role: "assistant", content: "纯文本回答" }]);
   });
+
+  it("结构化工具历史：mixed/unknown shape 直达 provider 边界也整轮省略", () => {
+    for (const parts of [
+      [{ role: "assistant", content: [{ type: "tool-call", toolCallId: "w", toolName: "web_fetch", input: { url: "https://x" } }] }],
+      [{ role: "assistant", content: [{ type: "unknown" }] }],
+    ]) {
+      const { rest } = splitSystemFromMessages([{ role: "assistant", content: "must-not-fallback", parts: parts as never }]);
+      expect(rest).toEqual([]);
+    }
+  });
+
+  it("递归 marker 在 read input/tool output 中也整轮省略，非法 marker 优先 malformed", () => {
+    for (const parts of [
+      [{ role: "assistant", content: [{ type: "tool-call", toolCallId: "r", toolName: "read", input: { nested: [{ kind: "web_fetch_history", version: 1, status: "withheld" }] } }] }],
+      [{ role: "tool", content: [{ type: "tool-result", toolCallId: "r", toolName: "read", output: { nested: { kind: "web_fetch_history", version: 1, status: "withheld" } } }] }],
+      [{ role: "assistant", content: [{ type: "tool-call", toolCallId: "w", toolName: "web_fetch", input: { nested: { kind: "web_fetch_history", version: 9, status: "withheld" } } }] }],
+    ]) {
+      expect(splitSystemFromMessages([{ role: "assistant", content: "must-not-fallback", parts: parts as never }]).rest).toEqual([]);
+    }
+  });
 });
 
 // 接线断言：runModelAttempt 的 API 路径必须把 system 走 streamText 的 system 参数，

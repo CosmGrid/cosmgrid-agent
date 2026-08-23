@@ -53,7 +53,7 @@ describe("buildChatPromptMessages", () => {
     expect(assistantMsg.parts).toEqual(structured); // 结构化 parts 已挂上
   });
 
-  it("结构化工具历史：assistant 的 parts 是坏 JSON → 不挂 parts，退化回纯文本（不炸）", () => {
+  it("结构化工具历史：assistant 的 parts 是坏 JSON → 整轮不发送给 provider", () => {
     const prompt = buildChatPromptMessages({
       messages: [{ id: "a1", role: "assistant", content: "回答", parts: "{坏JSON" }],
       effectiveWorkspace: "/repo",
@@ -63,7 +63,7 @@ describe("buildChatPromptMessages", () => {
       workspacePreamble: null,
       tooLargeNotice: (name) => `${name} 太大`,
     });
-    expect(prompt.at(-1)).toEqual({ role: "assistant", content: "回答" });
+    expect(prompt.some((message) => message.role === "assistant" && message.content === "回答")).toBe(false);
   });
 
   it("adds workspace guards and omits no-tools guard when a workspace is bound", () => {

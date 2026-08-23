@@ -145,6 +145,33 @@ describe("executor: doom loop 拦截", () => {
 });
 
 describe("executor: 落库 result_json + error_code", () => {
+  it("web_fetch 审计五类 URL/body sentinel 全部固定投影", async () => {
+    const sentinel = {
+      userinfo: "EXEC_USERINFO_SENTINEL",
+      query: "EXEC_QUERY_SENTINEL",
+      fragment: "EXEC_FRAGMENT_SENTINEL",
+      finalUrl: "EXEC_FINAL_URL_SENTINEL",
+      body: "EXEC_BODY_SENTINEL",
+    };
+    const tool = echoTool({
+      name: "web_fetch",
+      parameters: z.object({ url: z.string() }),
+      execute: async () => ({
+        status: "success" as const,
+        summary: `https://user:${sentinel.userinfo}@example.test/?q=${sentinel.query}#${sentinel.fragment}`,
+        output: `${sentinel.finalUrl}\n${sentinel.body}`,
+        artifacts: [{ kind: "url" as const, uri: sentinel.finalUrl, label: sentinel.body }],
+        nextActions: [{ action: "retry", reason: sentinel.body, safe: true }],
+      }),
+    });
+    await executeTool(tool, { url: `https://user:${sentinel.userinfo}@example.test/?q=${sentinel.query}#${sentinel.fragment}` }, ctxWithMessage("msg-web-fetch-sentinel"));
+    const call = mocks.create.mock.calls[0]![0];
+    expect(JSON.stringify(call)).not.toContain("SENTINEL");
+    expect(call.input).toEqual(JSON.stringify({ version: 1, toolName: "web_fetch", redacted: true }));
+    expect(call.output).toBe("[web_fetch output withheld]");
+    expect(JSON.parse(call.resultJson)).toMatchObject({ version: 1, toolName: "web_fetch" });
+  });
+
   it("audit projects known fields, redacts them, and excludes unknown/debug/parts", async () => {
     const tool = echoTool({
       execute: async () => ({

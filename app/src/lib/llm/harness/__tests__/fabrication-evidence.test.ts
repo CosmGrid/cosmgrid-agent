@@ -175,4 +175,16 @@ describe("buildFabricationEvidenceSummary 摘要构造", () => {
     const out = buildFabricationEvidenceSummary(rows);
     expect(out).toContain("messageId=<legacy>");
   });
+
+  it("raw web_fetch 经精确与 legacy 归属后，selected/summary 均不含 URL/body sentinel", () => {
+    const sentinels = ["FAB_USERINFO_SENTINEL", "FAB_QUERY_SENTINEL", "FAB_FRAGMENT_SENTINEL", "FAB_FINAL_URL_SENTINEL", "FAB_BODY_SENTINEL"];
+    const raw = rowOf({ toolName: "web_fetch", status: "success", messageId: "msg-fab", input: JSON.stringify({ url: `https://u:${sentinels[0]}@example.test/?q=${sentinels[1]}#${sentinels[2]}` }), output: `${sentinels[3]} ${sentinels[4]}`, resultJson: JSON.stringify({ finalUrl: sentinels[3], body: sentinels[4] }) });
+    const selected = selectRowsForMessage([raw], { assistantMessageId: "msg-fab", sinceIso: null });
+    expect(JSON.stringify(selected)).not.toContain("SENTINEL");
+    expect(selected[0]).toMatchObject({ input: JSON.stringify({ version: 1, toolName: "web_fetch", redacted: true }), output: "[web_fetch output withheld]" });
+    expect(buildFabricationEvidenceSummary(selected)).not.toContain("SENTINEL");
+
+    const legacy = selectRowsForMessage([{ ...raw, messageId: null, createdAt: "2026-08-01T00:00:00Z" }], { assistantMessageId: "missing", sinceIso: "2026-01-01T00:00:00Z" });
+    expect(JSON.stringify(legacy)).not.toContain("SENTINEL");
+  });
 });

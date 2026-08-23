@@ -68,9 +68,9 @@ describe("verifyFileClaims", () => {
 });
 
 describe("verifyUrlClaims（web_fetch 版——覆盖之前 read-only 校验漏掉的网页 claim）", () => {
-  it("声称的 URL 在 web_fetch 成功记录里 → verified", () => {
+  it("任意 web_fetch URL 记录均 fail closed → 未验证", () => {
     const out = verifyUrlClaims(["https://example.com/a"], [fetchRec("https://example.com/a")]);
-    expect(out[0]?.verified).toBe(true);
+    expect(out[0]?.verified).toBe(false);
   });
 
   it("声称的 URL 没有对应 web_fetch 记录 → 未验证（编的）", () => {
@@ -79,9 +79,9 @@ describe("verifyUrlClaims（web_fetch 版——覆盖之前 read-only 校验漏�
     expect(out[0]?.reason).toContain("编造");
   });
 
-  it("协议头大小写、末尾斜杠差异能匹配", () => {
+  it("协议头大小写、末尾斜杠差异也不能绕过隔离", () => {
     const out = verifyUrlClaims(["https://example.com/a/"], [fetchRec("HTTPS://example.com/a")]);
-    expect(out[0]?.verified).toBe(true);
+    expect(out[0]?.verified).toBe(false);
   });
 
   it("web_fetch 记录状态非 success（超时/失败）→ 不算真读到", () => {

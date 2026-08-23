@@ -10,6 +10,7 @@ import { verifyTask } from "@/lib/llm/evidence/task-verifier";
 import { VERIFY_ACCEPTANCE_CRITERIA } from "@/lib/llm/evidence/verify-acceptance-criteria";
 import { reportTaskOutcome, nodeOutcomeToTaskOutcome } from "@/lib/evals/task-outcome-reporter";
 import { recordPlaybookEventSafe, runPlaybookPipeline } from "@/lib/llm/playbook/pipeline";
+import { projectStructuredParts } from "@/lib/security-invariants/web-fetch-privacy";
 import type { VerificationResult } from "@/lib/llm/evidence/types";
 import type { WorkflowSnapshot } from "@/lib/workflow/types";
 import type { ChatMessage } from "@/pages/chat/types";
@@ -316,10 +317,11 @@ export async function finalizeStreamedChatTurn(
   );
   // 结构化工具历史：只有本轮真调过工具（toolCallCount>0）才存 parts——纯问答轮存了也没意义、
   // 徒增 DB。存的是 AI SDK 给的真实 assistant(tool-call)/tool(result)/文字消息序列，下一轮原样回放。
-  const structuredParts =
+  const rawStructuredParts =
     args.streamingResult.lastToolCallCount > 0 && args.streamingResult.responseMessages?.length
       ? JSON.stringify(args.streamingResult.responseMessages)
       : null;
+  const structuredParts = projectStructuredParts(rawStructuredParts);
   args.persistAssistant(
     finalContent,
     args.streamingResult.lastModelId,

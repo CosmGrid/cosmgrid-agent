@@ -6,6 +6,7 @@ import {
 } from "./result-contract";
 import { safeStringify } from "./executor-serialization";
 import type { AnyToolDefinition, ToolContext } from "./types";
+import { projectToolExecutionForAudit, projectWebFetchInput } from "@/lib/security-invariants/web-fetch-privacy";
 
 export async function persistToolExecution(
   tool: AnyToolDefinition,
@@ -16,12 +17,31 @@ export async function persistToolExecution(
   maxOutputChars: number,
 ): Promise<void> {
   try {
-    const persistResult: ToolResultV2 = sanitizeResultV2(result, maxOutputChars, { includeParts: false });
-    await toolExecutions.create({
+    const isWebFetch = tool.name === "web_fetch";
+    const base = {
       projectId: ctx.projectId ?? null,
       conversationId: ctx.conversationId ?? null,
       messageId: ctx.messageId ?? null,
       toolName: tool.name,
+      durationMs,
+    };
+    if (isWebFetch) {
+      const projected = projectToolExecutionForAudit(result, durationMs);
+      await toolExecutions.create({
+        ...base,
+        input: projectWebFetchInput(rawInput),
+        output: "[web_fetch output withheld]",
+        status: projected.status,
+        userConfirmed: projected.userConfirmed,
+        reversible: projected.reversible,
+        resultJson: JSON.stringify(projected),
+        errorCode: projected.errorCode,
+      });
+      return;
+    }
+    const persistResult = sanitizeResultV2(result, maxOutputChars, { includeParts: false });
+    await toolExecutions.create({
+      ...base,
       input: safeStringify(rawInput),
       output: persistResult.output,
       status: persistResult.status,
@@ -31,7 +51,6 @@ export async function persistToolExecution(
       // memory）无条件走 requireApprovalAsV2，没有主动报这个字段，走兜底推导仍然准确。
       userConfirmed: persistResult.userConfirmed ?? (persistResult.status !== "denied" && !tool.readOnly),
       reversible: persistResult.reversible ?? false,
-      durationMs,
       resultJson: serializeResultV2(persistResult),
       errorCode: persistResult.error?.code ?? null,
     });

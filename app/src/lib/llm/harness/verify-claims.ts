@@ -5,6 +5,7 @@
 //
 // read 记录从 tool_executions 表查：input 字段是 JSON.stringify({file_path, ...})。
 
+
 export interface ReadRecord {
   /** tool_executions.input，JSON 字符串，read 工具的形如 {file_path,...} */
   input: string;
@@ -91,25 +92,6 @@ export interface FetchRecord {
 }
 
 /** 从一条 web_fetch 审计记录的 input 里解析出 url */
-function extractFetchUrl(input: string): string | null {
-  try {
-    const obj = JSON.parse(input) as unknown;
-    if (obj && typeof obj === "object" && "url" in obj) {
-      const u = (obj as { url: unknown }).url;
-      if (typeof u === "string" && u) return u;
-    }
-  } catch {
-    // 坏 JSON 忽略
-  }
-  return null;
-}
-
-/** URL 匹配：忽略协议头大小写和末尾斜杠差异 */
-function urlMatches(claimed: string, actual: string): boolean {
-  const norm = (u: string) => u.replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase();
-  return norm(claimed) === norm(actual);
-}
-
 /**
  * 校验模型声称抓取过的 URL 列表。
  * @param claimedUrls 模型文本里提取的 URL（extractUrlClaims 的输出）
@@ -119,20 +101,13 @@ export function verifyUrlClaims(
   claimedUrls: string[],
   fetchRecords: FetchRecord[],
 ): ClaimVerification[] {
-  const fetchedUrls = fetchRecords
-    .filter((r) => r.status === "success")
-    .map((r) => extractFetchUrl(r.input))
-    .filter((u): u is string => u !== null);
-
   return claimedUrls.map((claimed) => {
-    const matched = fetchedUrls.some((u) => urlMatches(claimed, u));
-    return matched
-      ? { claimed, verified: true }
-      : {
-          claimed,
-          verified: false,
-          reason: "模型声称抓取过此网页，但本次对话没有对应的 web_fetch 成功记录——内容可能是编造的",
-        };
+    void fetchRecords;
+    return {
+      claimed,
+      verified: false,
+      reason: "web_fetch 历史证据被隔离，无法验证网页内容，不能据此排除编造",
+    };
   });
 }
 

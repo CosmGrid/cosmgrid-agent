@@ -107,4 +107,18 @@ describe("结构化工具历史 端到端回放（存储→重建→展开）", 
     const { rest } = splitSystemFromMessages(promptMsgs);
     expect(rest.at(-1)).toEqual({ role: "assistant", content: "你好呀" });
   });
+
+  it("mixed/marker/malformed/unknown parts 整轮不回放，只有 null/空 parts 回退 content", () => {
+    const mixed = JSON.stringify([{ role: "assistant", content: [{ type: "tool-call", toolCallId: "w", toolName: "web_fetch", input: { url: "https://x" } }] }]);
+    for (const parts of [mixed, JSON.stringify({ version: 1, kind: "web_fetch_history", status: "withheld" }), "{bad", JSON.stringify([{ role: "assistant", content: [{ type: "unknown" }] }])]) {
+      const chat = dbMessagesToChat([makeDbMessage({ id: "bad", content: "must-not-fallback", parts })], []);
+      const prompt = buildChatPromptMessages({ messages: chat, effectiveWorkspace: "/repo", primaryIsCli: false, projectMemoryPreamble: null, crossProjectPreamble: null, workspacePreamble: null, tooLargeNotice: (n) => n });
+      expect(splitSystemFromMessages(prompt).rest.some((m) => JSON.stringify(m).includes("must-not-fallback"))).toBe(false);
+    }
+    for (const parts of [null, ""]) {
+      const chat = dbMessagesToChat([makeDbMessage({ id: "plain", content: "fallback", parts })], []);
+      const prompt = buildChatPromptMessages({ messages: chat, effectiveWorkspace: null, primaryIsCli: false, projectMemoryPreamble: null, crossProjectPreamble: null, workspacePreamble: null, tooLargeNotice: (n) => n });
+      expect(splitSystemFromMessages(prompt).rest.at(-1)).toEqual({ role: "assistant", content: "fallback" });
+    }
+  });
 });

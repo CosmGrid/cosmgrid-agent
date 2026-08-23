@@ -134,12 +134,15 @@ describe("finalizeStreamedChatTurn", () => {
     expect(setMessages.mock.results[0]?.value[0]).toMatchObject({ toolCallCount: 1 });
   });
 
-  it("结构化工具历史：toolCallCount>0 且带 responseMessages → persistAssistant 收到 JSON 化的 parts", async () => {
+  it("结构化工具历史：混合 web_fetch 整轮写入 withheld envelope", async () => {
     const setMessages = vi.fn((updater) => updater([{ id: "a-1", role: "assistant", content: "" } as ChatMessage]));
     const persistAssistant = vi.fn();
     const responseMessages = [
       { role: "assistant", content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: { file_path: "a.md" } }] },
       { role: "tool", content: [{ type: "tool-result", toolCallId: "c1", toolName: "read", output: { type: "text", value: "内容" } }] },
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "c2", toolName: "web_fetch", input: { url: "https://u:STREAM_USERINFO_SENTINEL@example.test/?q=STREAM_QUERY_SENTINEL#STREAM_FRAGMENT_SENTINEL" } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "c2", toolName: "web_fetch", output: { finalUrl: "STREAM_FINAL_URL_SENTINEL", body: "STREAM_BODY_SENTINEL" } }] },
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "c3", toolName: "bash", input: { command: "echo ok" } }] },
       { role: "assistant", content: [{ type: "text", text: "读完了" }] },
     ];
 
@@ -169,7 +172,24 @@ describe("finalizeStreamedChatTurn", () => {
 
     const partsArg = persistAssistant.mock.calls[0]?.[5];
     expect(typeof partsArg).toBe("string");
-    expect(JSON.parse(partsArg)).toEqual(responseMessages);
+    expect(JSON.parse(partsArg)).toMatchObject({ version: 1, kind: "web_fetch_history", status: "withheld" });
+    expect(partsArg).not.toContain("SENTINEL");
+  });
+
+  it("结构化工具历史：safe read/bash responseMessages 原样 JSON 写入", async () => {
+    const persistAssistant = vi.fn();
+    await finalizeStreamedChatTurn({
+      text: "读文件", assistantMessage: { id: "safe", role: "assistant", content: "" }, assistantId: "safe",
+      streamingResult: { fullContent: "完成", lastModelId: "m", lastToolCallCount: 1, harnessDirty: false,
+        responseMessages: [{ role: "assistant", content: [{ type: "tool-call", toolCallId: "r1", toolName: "read", input: { file_path: "a" } }] }, { role: "tool", content: [{ type: "tool-result", toolCallId: "r1", toolName: "read", output: "ok" }] }, { role: "assistant", content: [{ type: "tool-call", toolCallId: "b1", toolName: "bash", input: { command: "pwd" } }] }] as never },
+      conversationId: "c", projectId: null, cacheEligible: false, taskRole: "standard", shouldCompleteWorkflowNode: false, workflowSnapshot: null, workflowRunId: null, controllerAborted: false,
+      persistAssistant, setMessages: vi.fn((updater) => updater([])), applyWorkflowSnapshot: vi.fn(),
+    });
+    const stored = JSON.parse(persistAssistant.mock.calls[0]?.[5]);
+    expect(stored).toHaveLength(3);
+    expect(stored[0].content[0]).toMatchObject({ type: "tool-call", toolCallId: "r1", toolName: "read", input: { file_path: "a" } });
+    expect(stored[1].content[0]).toMatchObject({ type: "tool-result", toolCallId: "r1", toolName: "read", output: "ok" });
+    expect(stored[2].content[0]).toMatchObject({ type: "tool-call", toolCallId: "b1", toolName: "bash", input: { command: "pwd" } });
   });
 
   it("结构化工具历史：toolCallCount=0（纯问答轮）→ parts 传 null，不落结构", async () => {

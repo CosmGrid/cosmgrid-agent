@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   listValid: vi.fn(),
   recordHit: vi.fn(),
   deleteExpired: vi.fn(),
+  embed: vi.fn(),
 }));
 
 vi.mock("../../db", () => ({
@@ -16,15 +17,17 @@ vi.mock("../../db", () => ({
     deleteExpired: mocks.deleteExpired,
   },
 }));
+vi.mock("../embedding", () => ({
+  getEmbeddingProvider: () => ({ name: "test-provider", embed: mocks.embed }),
+}));
 
-import { lookupCache, writeCache, cleanupExpiredCache, CACHE_TTL_MS } from "../semantic-cache";
-import { keywordEmbed, getEmbeddingProvider } from "../embedding";
+import { lookupCache, writeCache, cleanupExpiredCache } from "../semantic-cache";
 
 function row(query: string, response: string, over: Record<string, unknown> = {}) {
   return {
     id: `c-${query}`,
     queryText: query,
-    queryEmbedding: keywordEmbed(query),
+    queryEmbedding: [1, 0, 0],
     responseText: response,
     modelId: "m-1",
     taskType: "standard",
@@ -42,6 +45,7 @@ beforeEach(() => {
   mocks.create.mockResolvedValue(undefined);
   mocks.recordHit.mockResolvedValue(undefined);
   mocks.deleteExpired.mockResolvedValue(undefined);
+  mocks.embed.mockResolvedValue([1, 0, 0]);
 });
 
 describe("lookupCache", () => {
@@ -50,13 +54,13 @@ describe("lookupCache", () => {
     expect(await lookupCache("任意")).toBeNull();
   });
 
-  it("命中相同 query → 返回缓存并累加命中", async () => {
+  it("A2a 永久旁路：命中相同 query 也返回 null 且不访问缓存", async () => {
     mocks.listValid.mockResolvedValue([row("什么是闭包", "闭包是函数加词法环境")]);
     const hit = await lookupCache("什么是闭包");
-    expect(hit).not.toBeNull();
-    expect(hit!.responseText).toBe("闭包是函数加词法环境");
-    expect(hit!.similarity).toBeGreaterThanOrEqual(0.92);
-    expect(mocks.recordHit).toHaveBeenCalledWith(hit!.id);
+    expect(hit).toBeNull();
+    expect(mocks.listValid).not.toHaveBeenCalled();
+    expect(mocks.recordHit).not.toHaveBeenCalled();
+    expect(mocks.embed).not.toHaveBeenCalled();
   });
 
   it("无关 query 不命中（相似度低于阈值）", async () => {
@@ -66,13 +70,15 @@ describe("lookupCache", () => {
     expect(mocks.recordHit).not.toHaveBeenCalled();
   });
 
-  it("多条命中取相似度最高", async () => {
+  it("A2a 永久旁路：多条历史缓存也不读取", async () => {
     mocks.listValid.mockResolvedValue([
       row("解释闭包概念", "答案A"),
       row("什么是闭包", "答案B"),
     ]);
     const hit = await lookupCache("什么是闭包");
-    expect(hit!.responseText).toBe("答案B");
+    expect(hit).toBeNull();
+    expect(mocks.listValid).not.toHaveBeenCalled();
+    expect(mocks.embed).not.toHaveBeenCalled();
   });
 
   it("维度不一致的旧缓存被跳过（换过 provider）", async () => {
@@ -93,12 +99,10 @@ describe("lookupCache", () => {
 });
 
 describe("D9：lookupCache 仅按当前 embedding provider 拉缓存", () => {
-  it("listValid 收到 providerName 过滤，避免跨 provider 全表扫描", async () => {
+  it("A2a 不调用 listValid", async () => {
     mocks.listValid.mockResolvedValue([row("什么是闭包", "闭包是函数加词法环境")]);
     await lookupCache("什么是闭包");
-    expect(mocks.listValid).toHaveBeenCalledTimes(1);
-    const callArg = mocks.listValid.mock.calls[0]![0];
-    expect(callArg).toEqual({ providerName: getEmbeddingProvider().name });
+    expect(mocks.listValid).not.toHaveBeenCalled();
   });
 
   it("DB 层 mock 即便返回别的 provider 的整批 vec，lookup 也不命中（双重防线）", async () => {
@@ -112,17 +116,13 @@ describe("D9：lookupCache 仅按当前 embedding provider 拉缓存", () => {
 });
 
 describe("writeCache — 保守过滤", () => {
-  it("普通问答写入，expiresAt ≈ now + 7 天 + 带 providerName 标记", async () => {
+  it("A2a 永久旁路：普通问答也不写缓存", async () => {
     const before = Date.now();
     const ok = await writeCache("什么是闭包", "闭包是...", "m-1", "standard");
-    expect(ok).toBe(true);
-    expect(mocks.create).toHaveBeenCalledTimes(1);
-    const arg = mocks.create.mock.calls[0]![0];
-    const ttl = new Date(arg.expiresAt).getTime() - before;
-    expect(ttl).toBeGreaterThan(CACHE_TTL_MS - 5000);
-    expect(ttl).toBeLessThan(CACHE_TTL_MS + 5000);
-    // 写时带当前 provider name，未来升级 embedding 算法时旧缓存能被识别
-    expect(arg.providerName).toBe("keyword-hash-v2");
+    void before;
+    expect(ok).toBe(false);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.embed).not.toHaveBeenCalled();
   });
 
   it("时间敏感 query 不写", async () => {

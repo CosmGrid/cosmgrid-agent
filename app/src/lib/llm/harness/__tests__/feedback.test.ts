@@ -37,15 +37,15 @@ describe("evaluateHarness", () => {
     expect(isClean(v)).toBe(false);
   });
 
-  it("声称抓取过的网页有真实 web_fetch 成功记录 → 干净", () => {
+  it("即使有 raw web_fetch 成功记录也 fail closed", () => {
     const v = evaluateHarness(
       "我读到了 https://github.com/foo/bar 说这是个 MIT 项目",
       [],
       0,
       [fetchOf("https://github.com/foo/bar")],
     );
-    expect(v.unverifiedUrls).toEqual([]);
-    expect(isClean(v)).toBe(true);
+    expect(v.unverifiedUrls).toEqual(["https://github.com/foo/bar"]);
+    expect(isClean(v)).toBe(false);
   });
 
   it("不传 fetchRecords（旧调用点）→ 按最严格口径判定，跟不传 read 记录一样会被标未验证", () => {
@@ -104,14 +104,14 @@ describe("buildCorrectionPrompt", () => {
     expect(p).toContain("结构化 tool_call");
   });
 
-  it("有工具 + 未验证 URL → 叫模型去真调 web_fetch", () => {
+  it("有工具 + 未验证 URL → 仍只允许依据可见来源作答", () => {
     const p = buildCorrectionPrompt(
       { unverifiedPaths: [], unverifiedUrls: ["https://example.com/a"], pseudoToolNames: [] },
       { hasTools: true },
     );
     expect(p).toContain("https://example.com/a");
-    expect(p).toContain("web_fetch");
-    expect(p).toContain("真正调用");
+    expect(p).toContain("正文、截图或其他可见来源");
+    expect(p).not.toContain("有可用的 web_fetch 工具");
   });
 
   it("无工具 + 未验证 URL → 叫模型别编、让用户贴内容", () => {
@@ -119,8 +119,8 @@ describe("buildCorrectionPrompt", () => {
       { unverifiedPaths: [], unverifiedUrls: ["https://example.com/a"], pseudoToolNames: [] },
       { hasTools: false },
     );
-    expect(p).toContain("没有可用的网页抓取工具");
-    expect(p).toContain("贴过来");
+    expect(p).toContain("正文、截图或其他可见来源");
+    expect(p).not.toContain("有可用的 web_fetch 工具");
   });
 
   it("有工具 + 未验证命令 → 叫模型去真调 bash/grep/web_search", () => {
