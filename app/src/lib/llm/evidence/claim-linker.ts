@@ -43,7 +43,7 @@ function linkOne(claim: LinkedClaim, execRows: ToolExecutionRow[], evidence: Evi
     case "file_modified":
       return linkFileClaim(claim, execRows, evidence);
     case "url_fetched":
-      return linkUrlClaim(claim, execRows, evidence);
+      return linkUrlClaim(claim, execRows);
     case "command_executed":
       return linkCommandClaim(claim, execRows, evidence);
     case "test_result":
@@ -102,33 +102,12 @@ function extractPathFromToolInput(_toolName: string, input: string): string | nu
 // url_fetched
 // =====================================================================
 
-function linkUrlClaim(claim: LinkedClaim, execRows: ToolExecutionRow[], evidence: EvidenceRef[]): LinkedClaim {
+function linkUrlClaim(claim: LinkedClaim, execRows: ToolExecutionRow[]): LinkedClaim {
   const fetchRows = execRows.filter((r) => r.toolName === "web_fetch" && r.status === "success");
-  const matchedRows = fetchRows.filter((r) => urlMatches(claim.text, r.input));
-  if (matchedRows.length > 0) {
-    return withEvidenceIds(claim, matchedRows, evidence, "supported");
-  }
   if (fetchRows.length === 0) {
     return { ...claim, verdict: "insufficient", conflictReason: "本次对话没有 web_fetch 成功记录" };
   }
   return { ...claim, verdict: "insufficient", conflictReason: "web_fetch 记录中没有匹配该 URL 的证据" };
-}
-
-function urlMatches(claimed: string, actualInput: string): boolean {
-  const url = extractUrlFromInput(actualInput);
-  if (!url) return false;
-  const norm = (u: string) => u.replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase();
-  return norm(claimed) === norm(url);
-}
-
-function extractUrlFromInput(input: string): string | null {
-  try {
-    const obj = JSON.parse(input) as Record<string, unknown>;
-    const u = obj.url;
-    return typeof u === "string" && u ? u : null;
-  } catch {
-    return null;
-  }
 }
 
 // =====================================================================

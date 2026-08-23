@@ -17,6 +17,7 @@
 //   → 喂给 judgeFabrication(content, model, summary)
 
 import type { ToolExecutionRow } from "@/lib/db";
+import { projectWebFetchExecutionRow } from "@/lib/security-invariants/web-fetch-privacy";
 import {
   FABRICATION_PER_INPUT_MAX,
   FABRICATION_PER_OUTPUT_MAX,
@@ -76,6 +77,9 @@ export function selectRowsForMessage(
   rows: readonly ToolExecutionRow[],
   args: { assistantMessageId: string | null; sinceIso: string | null },
 ): ToolExecutionRow[] {
+  const project = (selected: ToolExecutionRow[]): ToolExecutionRow[] => selected.map((r) =>
+    r.toolName === "web_fetch" ? projectWebFetchExecutionRow(r) : r,
+  );
   if (!rows.length) return [];
   const withMessageId: ToolExecutionRow[] = [];
   const legacyRows: ToolExecutionRow[] = [];
@@ -90,20 +94,20 @@ export function selectRowsForMessage(
     for (const r of withMessageId) {
       if (r.messageId === args.assistantMessageId) exact.push(r);
     }
-    if (exact.length > 0) return exact;
+    if (exact.length > 0) return project(exact);
 
     if (legacyRows.length === 0) return [];
     if (!args.sinceIso) return [];
     const sinceTs = Date.parse(args.sinceIso);
     if (Number.isNaN(sinceTs)) return [];
-    return legacyRows.filter((r) => Date.parse(r.createdAt) >= sinceTs);
+    return project(legacyRows.filter((r) => Date.parse(r.createdAt) >= sinceTs));
   }
 
   // 没传 messageId → 退化到 sinceIso 时间窗口
   if (!args.sinceIso) return [];
   const sinceTs = Date.parse(args.sinceIso);
   if (Number.isNaN(sinceTs)) return [];
-  return rows.filter((r) => Date.parse(r.createdAt) >= sinceTs);
+  return project(rows.filter((r) => Date.parse(r.createdAt) >= sinceTs));
 }
 
 /**

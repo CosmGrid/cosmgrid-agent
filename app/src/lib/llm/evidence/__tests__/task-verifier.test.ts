@@ -16,6 +16,7 @@ import type { ToolExecutionRow } from "@/lib/db";
 import { verifyTask } from "../task-verifier";
 import { VERIFY_ACCEPTANCE_CRITERIA } from "../verify-acceptance-criteria";
 import type { EvidenceRef, LinkedClaim, StructuredAcceptanceCriterion, VerificationResult } from "../types";
+import { projectWebFetchExecutionRow } from "@/lib/security-invariants/web-fetch-privacy";
 
 // =====================================================================
 // 工厂函数（rowOf / claimOf / criterionOf）
@@ -100,6 +101,19 @@ describe("task-verifier: 场景 1 — 声称修改文件但无 write/edit 记录
     expect(fileClaim).toBeDefined();
     expect(fileClaim?.verdict).toBe("insufficient");
     expect(fileClaim?.text).toContain("src/foo.ts");
+  });
+});
+
+describe("task-verifier: web_fetch URL 证据隔离", () => {
+  it("raw 与 projected web_fetch row 均不得支持 URL claim", () => {
+    const raw = rowOf({ id: "fetch-raw", toolName: "web_fetch", status: "success", input: JSON.stringify({ url: "https://example.test/raw" }), output: "raw body" });
+    const projected = projectWebFetchExecutionRow({ ...raw });
+    for (const execRows of [[raw], [projected]]) {
+      const result = callVerify({ finalContent: "我读取了 https://example.test/raw 并确认内容。", execRows });
+      const claim = result.linkedClaims.find((item) => item.kind === "url_fetched");
+      expect(claim?.verdict).toBe("insufficient");
+      expect(claim?.evidenceIds ?? []).not.toContain(execRows[0]!.id);
+    }
   });
 });
 

@@ -1,21 +1,10 @@
-import type { ModelMessage } from "ai";
 import { buildTimePreamble, buildNoToolsPreamble, buildImageGuardPreamble, buildDomesticModelReminder } from "@/lib/llm/prompts/context-preamble";
 import { buildCorePreamble } from "@/lib/llm/prompts/cosmgrid-rules";
 import { toUserCoreMessage } from "@/lib/llm/attachments";
 import { detectIntentNoToolCall } from "@/lib/llm/harness/feedback";
 import type { ChatMsg } from "@/lib/llm/context-compressor";
 import type { ChatMessage } from "./types";
-
-/** 解析 messages.parts（结构化 ModelMessage 序列的 JSON 串）。坏数据/空 → null，回放退化回文本。 */
-function parseStructuredParts(raw: string | null | undefined): ModelMessage[] | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) && parsed.length > 0 ? (parsed as ModelMessage[]) : null;
-  } catch {
-    return null;
-  }
-}
+import { classifyStructuredParts } from "@/lib/security-invariants/web-fetch-privacy";
 
 // 真实事故（2026-07-04）：模型上一轮回复"好，再试一次。"，本轮 0 个真实工具调用，
 // 用户没等到结果追问"？"；模型下一轮完全没有"上一轮到底做没做"的依据，只能盯着
@@ -64,17 +53,20 @@ export function buildChatPromptMessages(args: {
       ? [{ role: "system" as const, content: buildNoToolsPreamble() }]
       : []),
     ...(lastTurnReminder ? [{ role: "system" as const, content: lastTurnReminder }] : []),
-    ...args.messages.filter((m) => m.kind !== "receipt").map((m): ChatMsg => {
+    ...args.messages.filter((m) => m.kind !== "receipt").flatMap((m): ChatMsg[] => {
       if (m.role === "user" && m.attachments && m.attachments.length > 0) {
-        return toUserCoreMessage(m.content, m.attachments, { tooLargeNotice: args.tooLargeNotice });
+        return [toUserCoreMessage(m.content, m.attachments, { tooLargeNotice: args.tooLargeNotice })];
       }
       // 结构化工具历史：这条 assistant 轮存了真实的 tool-call/tool-result 结构，挂到 ChatMsg.parts，
       // 发送边界会展开成标准 ModelMessage 回放（而非 content 散文压平），弱模型才不会照散文编造。
       if (m.role === "assistant") {
-        const parts = parseStructuredParts(m.parts);
-        if (parts) return { role: m.role, content: m.content, parts };
+        const classified = classifyStructuredParts(m.parts);
+        if (classified.status === "safe" && classified.parts) {
+          return [{ role: m.role, content: m.content, parts: classified.parts as ChatMsg["parts"] }];
+        }
+        if (m.parts && m.parts.trim() !== "") return [];
       }
-      return { role: m.role, content: m.content };
+      return [{ role: m.role, content: m.content }];
     }),
   ];
 }

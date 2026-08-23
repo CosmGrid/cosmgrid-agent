@@ -1,5 +1,6 @@
 import { getDb } from "./connection";
 import { boolToInt, newId, now } from "./utils";
+import { projectWebFetchExecutionRow } from "@/lib/security-invariants/web-fetch-privacy";
 
 // ============ debateSessions CRUD（v0.8 阶段5：多角色对弈） ============
 
@@ -111,7 +112,7 @@ export interface ToolExecutionRow {
 }
 
 function mapToolExecRow(r: any): ToolExecutionRow {
-  return {
+  const mapped = {
     id: r.id,
     projectId: r.project_id,
     conversationId: r.conversation_id,
@@ -127,6 +128,7 @@ function mapToolExecRow(r: any): ToolExecutionRow {
     resultJson: r.result_json ?? null,
     errorCode: r.error_code ?? null,
   };
+  return mapped.toolName === "web_fetch" ? projectWebFetchExecutionRow(mapped) : mapped;
 }
 
 export const toolExecutions = {
@@ -148,6 +150,20 @@ export const toolExecutions = {
   }): Promise<string> {
     const db = await getDb();
     const id = newId();
+    const safeInput = input.toolName === "web_fetch"
+      ? projectWebFetchExecutionRow({
+          id,
+          projectId: input.projectId ?? null,
+          conversationId: input.conversationId ?? null,
+          messageId: input.messageId ?? null,
+          status: input.status,
+          userConfirmed: input.userConfirmed ?? false,
+          reversible: input.reversible ?? false,
+          durationMs: input.durationMs,
+          createdAt: now(),
+          errorCode: input.errorCode ?? null,
+        })
+      : null;
     await db.execute(
       `INSERT INTO tool_executions
         (id, project_id, conversation_id, message_id, tool_name, input, output, status,
@@ -155,10 +171,14 @@ export const toolExecutions = {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         id, input.projectId ?? null, input.conversationId ?? null, input.messageId ?? null, input.toolName,
-        input.input, input.output, input.status,
-        boolToInt(input.userConfirmed ?? false), boolToInt(input.reversible ?? false),
+        safeInput?.input ?? input.input,
+        safeInput?.output ?? input.output,
+        safeInput?.status ?? input.status,
+        boolToInt(safeInput?.userConfirmed ?? input.userConfirmed ?? false),
+        boolToInt(safeInput?.reversible ?? input.reversible ?? false),
         input.durationMs, now(),
-        input.resultJson ?? null, input.errorCode ?? null,
+        safeInput?.resultJson ?? input.resultJson ?? null,
+        safeInput?.errorCode ?? (safeInput ? null : input.errorCode ?? null),
       ]
     );
     return id;

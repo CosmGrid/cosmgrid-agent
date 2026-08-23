@@ -1,5 +1,6 @@
 import { getDb } from "./connection";
 import { boolToInt, newId, now } from "./utils";
+import { projectStructuredParts } from "@/lib/security-invariants/web-fetch-privacy";
 
 // ============ messages CRUD ============
 
@@ -63,7 +64,7 @@ function mapMessageRow(r: MessageRow): DbMessage {
     chainDone: r.chain_done === null ? null : r.chain_done === 1,
     kind: r.kind,
     toolCallCount: r.tool_call_count,
-    parts: r.parts,
+    parts: projectStructuredParts(r.parts),
     createdAt: r.created_at,
   };
 }
@@ -120,7 +121,7 @@ export const messages = {
         input.chainDone === undefined || input.chainDone === null ? null : boolToInt(input.chainDone),
         input.kind ?? null,
         input.toolCallCount ?? null,
-        input.parts ?? null,
+        projectStructuredParts(input.parts),
         ts,
       ]
     );

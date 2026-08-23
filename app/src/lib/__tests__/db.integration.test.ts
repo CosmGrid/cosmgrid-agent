@@ -1348,6 +1348,57 @@ describe("toolExecutions", () => {
     expect(parsed.artifacts[0].kind).toBe("file");
     expect(parsed.nextActions[0].safe).toBe(true);
   });
+
+  it("direct web_fetch create 在原始 SQL 与 DAO 读边界均固定脱敏，普通 read 原样", async () => {
+    const conv = await db.conversations.create({ title: "c-tool-direct-boundary" });
+    const sentinels = ["DB_USERINFO_SENTINEL", "DB_QUERY_SENTINEL", "DB_FRAGMENT_SENTINEL", "DB_FINAL_URL_SENTINEL", "DB_BODY_SENTINEL"];
+    await db.toolExecutions.create({
+      conversationId: conv.id,
+      toolName: "web_fetch",
+      input: JSON.stringify({ url: `https://user:${sentinels[0]}@example.test/?q=${sentinels[1]}#${sentinels[2]}` }),
+      output: sentinels[4],
+      resultJson: JSON.stringify({ finalUrl: sentinels[3], body: sentinels[4] }),
+      errorCode: "DB_ERROR_SENTINEL",
+      status: "DB_STATUS_SENTINEL",
+      durationMs: 1,
+    });
+    const rawWeb = await adapter.select<Array<Record<string, unknown>>>(
+      "SELECT input, output, result_json, error_code, status FROM tool_executions WHERE conversation_id = $1 AND tool_name = $2",
+      [conv.id, "web_fetch"],
+    );
+    const daoWeb = await db.toolExecutions.listByConversation(conv.id);
+    expect(JSON.stringify(rawWeb)).not.toContain("SENTINEL");
+    expect(JSON.stringify(daoWeb)).not.toContain("SENTINEL");
+    expect(JSON.parse(String(rawWeb[0]!.input))).toMatchObject({ version: 1, toolName: "web_fetch", redacted: true });
+    expect(rawWeb[0]!.output).toBe("[web_fetch output withheld]");
+    expect(JSON.parse(String(rawWeb[0]!.result_json))).toMatchObject({ version: 1, toolName: "web_fetch" });
+    await db.toolExecutions.create({ conversationId: conv.id, toolName: "web_fetch", input: "raw", output: "raw", resultJson: "raw", errorCode: "TOOL_INVALID_PARAMS", status: "error", durationMs: 1 });
+    const knownRaw = await adapter.select<Array<Record<string, unknown>>>("SELECT error_code FROM tool_executions WHERE conversation_id = $1 AND tool_name = $2 AND error_code IS NOT NULL", [conv.id, "web_fetch"]);
+    expect(knownRaw[0]!.error_code).toBe("TOOL_INVALID_PARAMS");
+
+    await db.toolExecutions.create({ conversationId: conv.id, toolName: "read", input: '{"file_path":"a.ts"}', output: "file content", status: "success", durationMs: 2 });
+    const rawRead = await adapter.select<Array<Record<string, unknown>>>("SELECT input, output, status FROM tool_executions WHERE conversation_id = $1 AND tool_name = $2", [conv.id, "read"]);
+    const daoRead = (await db.toolExecutions.listByConversation(conv.id)).find((row) => row.toolName === "read")!;
+    expect(rawRead[0]).toMatchObject({ input: '{"file_path":"a.ts"}', output: "file content", status: "success" });
+    expect(daoRead.input).toBe('{"file_path":"a.ts"}');
+    expect(daoRead.output).toBe("file content");
+  });
+
+  it("历史 raw SQL web_fetch 与 messages.parts 经过生产 reader 双边隔离", async () => {
+    const conv = await db.conversations.create({ title: "c-tool-history-boundary" });
+    const sentinels = ["HIST_USERINFO_SENTINEL", "HIST_QUERY_SENTINEL", "HIST_FRAGMENT_SENTINEL", "HIST_FINAL_URL_SENTINEL", "HIST_BODY_SENTINEL"];
+    const rawInput = JSON.stringify({ url: `https://u:${sentinels[0]}@example.test/?q=${sentinels[1]}#${sentinels[2]}` });
+    const rawParts = JSON.stringify([{ role: "assistant", content: [{ type: "tool-call", toolCallId: "h", toolName: "read", input: { nested: { kind: "web_fetch_history", version: 1, status: "withheld" }, body: sentinels[4] } }] }]);
+    await adapter.execute("INSERT INTO tool_executions (id,conversation_id,tool_name,input,output,status,user_confirmed,reversible,duration_ms,created_at,result_json,error_code) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)", ["raw-hist", conv.id, "web_fetch", rawInput, `${sentinels[3]} ${sentinels[4]}`, "HIST_STATUS_SENTINEL", 0, 0, 1, new Date().toISOString(), JSON.stringify({ body: sentinels[4] }), "HIST_ERROR_SENTINEL"]);
+    await adapter.execute("INSERT INTO messages (id,conversation_id,role,content,model_id,input_tokens,output_tokens,cost,created_at,parts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", ["raw-msg-hist", conv.id, "assistant", "must-not-fallback", null, 0, 0, 0, new Date().toISOString(), rawParts]);
+    const toolRows = await db.toolExecutions.listByConversation(conv.id);
+    const messageRows = await db.messages.listByConversation(conv.id);
+    expect(JSON.stringify(toolRows)).not.toContain("SENTINEL");
+    expect(JSON.stringify(messageRows)).not.toContain("SENTINEL");
+    expect(toolRows[0]!.input).toContain('"redacted":true');
+    expect(toolRows[0]!.output).toBe("[web_fetch output withheld]");
+    expect(messageRows[0]!.parts).toBe(JSON.stringify({ version: 1, kind: "web_fetch_history", status: "withheld" }));
+  });
 });
 
 describe("workspaceConfigs", () => {

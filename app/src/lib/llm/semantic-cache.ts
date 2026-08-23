@@ -4,8 +4,7 @@
 // 保守接入（isCacheable）：时间敏感 query / 含代码的答案不写缓存，避免给过期或错误的代码。
 
 import { semanticCache } from "../db";
-import { getEmbeddingProvider } from "./embedding";
-import { cosineSimilarity, isCacheable, SIMILARITY_THRESHOLD } from "./similarity";
+import { SIMILARITY_THRESHOLD } from "./similarity";
 
 /** 缓存默认存活 7 天 */
 export const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -29,35 +28,9 @@ export async function lookupCache(
   query: string,
   threshold = SIMILARITY_THRESHOLD,
 ): Promise<CacheHit | null> {
-  // D9（2026-07-15）：只拉当前 embedding provider 的未过期缓存，避免把别的算法版本
-  // 的整批 vec 拉回 JS 再在下面逐个 skip（providerName 不匹配直接 continue）。
-  // providerName 是 vec 兼容性的硬边界，过滤它既正确又能走 idx_semantic_cache_lookup。
-  const provider = getEmbeddingProvider();
-  const rows = await semanticCache.listValid({ providerName: provider.name });
-  if (rows.length === 0) return null;
-
-  const qvec = await provider.embed(query);
-
-  let best: CacheHit | null = null;
-  for (const row of rows) {
-    // v0.9.1 关键防线：vec 跨算法版本不兼容（dim 可能一样但哈希分布不同），
-    // provider name 不匹配直接跳过，避免把老 vec 跟新 vec 做余弦（必全 miss 还浪费 CPU）。
-    if (row.providerName !== provider.name) continue;
-    if (row.queryEmbedding.length !== qvec.length) continue;
-    const sim = cosineSimilarity(qvec, row.queryEmbedding);
-    if (sim >= threshold && (!best || sim > best.similarity)) {
-      best = {
-        id: row.id,
-        responseText: row.responseText,
-        modelId: row.modelId,
-        similarity: sim,
-        ageMs: Date.now() - new Date(row.createdAt).getTime(),
-      };
-    }
-  }
-
-  if (best) await semanticCache.recordHit(best.id);
-  return best;
+  void query;
+  void threshold;
+  return null;
 }
 
 /**
@@ -70,19 +43,11 @@ export async function writeCache(
   modelId: string,
   taskType: string,
 ): Promise<boolean> {
-  if (!isCacheable(query, response)) return false;
-  const provider = getEmbeddingProvider();
-  const embedding = await provider.embed(query);
-  await semanticCache.create({
-    queryText: query,
-    queryEmbedding: embedding,
-    responseText: response,
-    modelId,
-    taskType,
-    providerName: provider.name,
-    expiresAt: new Date(Date.now() + CACHE_TTL_MS).toISOString(),
-  });
-  return true;
+  void query;
+  void response;
+  void modelId;
+  void taskType;
+  return false;
 }
 
 /** 清理过期缓存（StatsPage / 启动时调） */

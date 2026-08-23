@@ -16,6 +16,7 @@ import { resolveMaxOutputTokens } from "./model-limits";
 import { isNormalFinishReason, isRecoverableTruncation } from "./finish-reason";
 import type { ChatMsg } from "./context-compressor";
 import type { ModelEndpoint, StreamCallbacks, StreamUsage, StreamWithFallbackOptions } from "./chat-fallback-types";
+import { classifyStructuredParts } from "@/lib/security-invariants/web-fetch-privacy";
 
 /** 单次模型调用需要用到的回调子集——onSwitched/onUsage/onFinalToolCalls/onInvocationAudit
  *  属于外层 fallback 循环的编排结果，不该也不会被单次 attempt 触发。 */
@@ -74,7 +75,8 @@ export function splitSystemFromMessages(messages: ChatMsg[]): {
     } else if (m.role === "assistant" && m.parts && m.parts.length > 0) {
       // 结构化工具历史：展开真实的 assistant(tool-call)/tool(result)/文字序列回放，
       // 而不是把整轮压平成一条 content 散文——这是弱模型不再照散文编造的关键（探针 C 证明）。
-      rest.push(...m.parts);
+      const classified = classifyStructuredParts(JSON.stringify(m.parts));
+      if (classified.status === "safe") rest.push(...m.parts);
     } else {
       rest.push({ role: m.role, content: m.content } as ModelMessage);
     }

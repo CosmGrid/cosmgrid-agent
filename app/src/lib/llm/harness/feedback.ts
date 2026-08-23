@@ -88,13 +88,11 @@ function correctionForUnverifiedPaths(v: HarnessVerdict, hasTools: boolean): str
   ];
 }
 
-function correctionForUnverifiedUrls(v: HarnessVerdict, hasTools: boolean): string[] {
+function correctionForUnverifiedUrls(v: HarnessVerdict, _hasTools: boolean): string[] {
   if (!(v.unverifiedUrls && v.unverifiedUrls.length > 0)) return [];
   return [
     `- 你声称抓取过这些网页，但本次对话没有任何真实的 web_fetch 成功记录：${v.unverifiedUrls.join("、")}。`,
-    hasTools
-      ? "  你有可用的 web_fetch 工具——请**真正调用 web_fetch 抓取这些网页后**，根据真实内容重新回答；如果不需要抓，就别声称看过。"
-      : "  本次你没有可用的网页抓取工具，无法真读网页内容。请**不要再编造网页内容**——直说你读不了，请用户把正文贴过来或截图，不要假装已经看过。",
+    "  请仅依据对话中已经提供的正文、截图或其他可见来源作答；不要声称已访问网页。",
   ];
 }
 
